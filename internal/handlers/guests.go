@@ -4,6 +4,7 @@ import (
 	"github.com/akashtripathi12/TBO_Backend/internal/models"
 	"github.com/akashtripathi12/TBO_Backend/internal/utils"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 // List Event Guests
@@ -34,14 +35,31 @@ func (m *Repository) GetGuest(c *fiber.Ctx) error {
 	})
 }
 
-
-
 // Create Guest (Generic)
 func (m *Repository) CreateGuest(c *fiber.Ctx) error {
+	eventID := c.Params("id")
+
 	var guest models.Guest
+	// Note: ArrivalDate and DepartureDate must be in strict time.Time format (e.g., RFC3339) or handled by frontend
 	if err := c.BodyParser(&guest); err != nil {
 		return utils.ValidationErrorResponse(c, "Invalid request body")
 	}
+
+	// Basic Validation
+	if guest.Name == "" {
+		return utils.ValidationErrorResponse(c, "Name is required")
+	}
+
+	// Parse User ID from EventID string
+	parsedEventID, err := uuid.Parse(eventID)
+	if err != nil {
+		return utils.ValidationErrorResponse(c, "Invalid Event ID")
+	}
+
+	// Overwrite/Force fields
+	guest.ID = uuid.New()
+	guest.EventID = parsedEventID
+	guest.FamilyID = uuid.New() // New guest gets a new FamilyID by default
 
 	if err := m.DB.Create(&guest).Error; err != nil {
 		return utils.InternalErrorResponse(c, "Failed to create guest")

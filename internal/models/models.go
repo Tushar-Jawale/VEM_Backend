@@ -35,6 +35,7 @@ type Guest struct {
 	Phone         string
 	Email         string
 	EventID       uuid.UUID `gorm:"type:uuid;index;not null"`
+	FamilyID      uuid.UUID `gorm:"type:uuid;index"`
 	ArrivalDate   time.Time
 	DepartureDate time.Time
 }
@@ -49,15 +50,16 @@ func (g *Guest) BeforeSave(tx *gorm.DB) (err error) {
 }
 
 type Event struct {
-	ID             uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	AgentID        uuid.UUID      `gorm:"type:uuid;index"`
-	HeadGuestID    uuid.UUID      `gorm:"type:uuid;index"`
-	HotelID        string         `gorm:"index"`
-	RoomsInventory datatypes.JSON `gorm:"type:jsonb"` // Stores the [type, count] array
-	Status         string         `gorm:"default:'draft'"`
-	StartDate      time.Time
-	EndDate        time.Time
-	Location       string
+	ID             uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	AgentID        uuid.UUID      `gorm:"type:uuid;index" json:"agentId"`
+	HeadGuestID    uuid.UUID      `gorm:"type:uuid;index" json:"headGuestId"`
+	HotelID        string         `gorm:"index" json:"hotelId"`
+	Name           string         `gorm:"not null" json:"name"`
+	Location       string         `json:"location"`
+	RoomsInventory datatypes.JSON `gorm:"type:jsonb" json:"roomsInventory"`
+	Status         string         `gorm:"default:'draft'" json:"status"`
+	StartDate      time.Time      `json:"startDate"`
+	EndDate        time.Time      `json:"endDate"`
 }
 
 // 1. Country Table (Global)
