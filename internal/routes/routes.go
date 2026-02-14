@@ -86,8 +86,9 @@ func SetupRoutes(app *fiber.App, cfg *config.Config, repo *handlers.Repository) 
 	// -----------------------------
 	// Hotel Routes (Public)
 	// -----------------------------
-	hotels := api.Group("/hotels")
+	hotels := protected.Group("/hotels")
 	hotels.Get("/", repo.GetHotelsByCity)
+	hotels.Get("/:id", repo.GetHotel)
 	hotels.Get("/:hotelCode/rooms", repo.GetRoomsByHotel)
 	hotels.Get("/:hotelCode/banquets", repo.GetBanquetsByHotel)
 	hotels.Get("/:hotelCode/catering", repo.GetCateringByHotel)

@@ -40,3 +40,25 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 		"data":   hotels,
 	})
 }
+
+// GetHotel fetches a single hotel by its ID (hotel_code)
+// GET /api/v1/hotels/:id
+func (r *Repository) GetHotel(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var hotel models.Hotel
+	// Query by hotel_code (which is the primary key "ID" in struct, "hotel_code" in DB)
+	result := store.DB.First(&hotel, "hotel_code = ?", id)
+
+	if result.Error != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Hotel not found",
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status": "success",
+		"data":   hotel,
+	})
+}
