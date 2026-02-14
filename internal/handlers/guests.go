@@ -175,13 +175,33 @@ func (m *Repository) UpdateGuest(c *fiber.Ctx) error {
 }
 
 // Delete Guest
+// Delete Guest
 func (m *Repository) DeleteGuest(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	// Transaction to delete guest and release room (future scope: implementation plan mentioned shadow inventory release)
-	// For now, simple delete
-	if err := m.DB.Delete(&models.Guest{}, "id = ?", id).Error; err != nil {
+	tx := m.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// 1. Delete associated GuestAllocations first to avoid FK violation
+	if err := tx.Where("guest_id = ?", id).Delete(&models.GuestAllocation{}).Error; err != nil {
+		tx.Rollback()
+		return utils.InternalErrorResponse(c, "Failed to delete guest allocations")
+	}
+
+	// 2. Delete the guest
+	if err := tx.Delete(&models.Guest{}, "id = ?", id).Error; err != nil {
+		tx.Rollback()
 		return utils.InternalErrorResponse(c, "Failed to delete guest")
+	}
+
+	// 3. Commit
+	if err := tx.Commit().Error; err != nil {
+		return utils.InternalErrorResponse(c, "Transaction failed")
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
