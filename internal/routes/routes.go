@@ -56,7 +56,7 @@ func SetupRoutes(app *fiber.App, cfg *config.Config, repo *handlers.Repository) 
 	events.Delete("/:id", repo.DeleteEvent)
 	events.Get("/:id/venues", repo.GetEventVenues)
 	events.Get("/:id/allocations", repo.GetEventAllocations)
-	api.Post("/:id/guests", repo.CreateGuest)
+	events.Post("/:id/guests", repo.CreateGuest)
 	events.Get("/:id/guests", repo.GetGuests)
 	events.Post("/:id/head-guest", repo.AssignHeadGuest)
 

@@ -216,10 +216,9 @@ func (m *Repository) DeleteEvent(c *fiber.Ctx) error {
 }
 
 type AssignHeadGuestRequest struct {
-	ClerkID string `json:"clerkId"`
-	Name    string `json:"name"`
-	Email   string `json:"email"`
-	Phone   string `json:"phone"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Phone string `json:"phone"`
 }
 
 func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
@@ -229,7 +228,7 @@ func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if req.Email == "" { // Removed ClerkID check as it's no longer used for user creation
+	if req.Email == "" {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing required fields")
 	}
 
@@ -327,13 +326,15 @@ func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
 	}
 
 	// 3. Create Guest Record (optional, but requested in previous conversations)
-	// We will just create a basic guest entry
+	// We ensure the Guest ID matches the User ID so portal lookups work
 	guest := models.Guest{
-		EventID: event.ID,
-		Name:    req.Name,
-		Email:   req.Email,
-		Phone:   req.Phone,
-		Type:    "Adult",
+		ID:       user.ID, // Link User ID to Guest ID
+		EventID:  event.ID,
+		Name:     req.Name,
+		Email:    req.Email,
+		Phone:    req.Phone,
+		Type:     "Adult",
+		FamilyID: uuid.New(),
 	}
 	if err := tx.Create(&guest).Error; err != nil {
 		tx.Rollback()
