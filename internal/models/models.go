@@ -37,6 +37,9 @@ type Guest struct {
 	DepartureDate time.Time
 	Phone         string
 	Email         string
+	PassportDetails    datatypes.JSON `gorm:"type:jsonb"` // Number, expiry, country
+	DietaryPreferences datatypes.JSON `gorm:"type:jsonb"` // Veg, non-veg, allergies
+	VisaStatus         string         `gorm:"default:'pending'"` // 'pending', 'approved', 'rejected'
 }
 
 func (g *Guest) BeforeSave(tx *gorm.DB) (err error) {
@@ -58,6 +61,9 @@ type Event struct {
 	StartDate      time.Time
 	EndDate        time.Time
 	Location       string
+	EventType      string         `gorm:"default:'corporate'"` // 'wedding', 'corporate', 'mice'
+	Config         datatypes.JSON `gorm:"type:jsonb"`          // Payment rules, enabled features
+	ShadowInventory datatypes.JSON `gorm:"type:jsonb"`         // Verified available rooms
 }
 // 1. Country Table (Global)
 type Country struct {
@@ -141,4 +147,16 @@ type GuestAllocation struct {
     LockedPrice   float64   `gorm:"type:decimal(10,2)"` // Audit
     Status        string    `gorm:"default:'pending'"` // 'confirmed', 'checked_in'
     AssignedMode  string    `gorm:"default:'manual'"` // 'auto', 'manual'
+}
+
+// 8. Itinerary Item (New)
+type ItineraryItem struct {
+	ID          uint           `gorm:"primaryKey"`
+	EventID     uuid.UUID      `gorm:"type:uuid;index;not null"`
+	Title       string         `gorm:"not null"`
+	Description string         `gorm:"type:text"`
+	StartTime   time.Time
+	EndTime     time.Time
+	Location    string
+	AudienceTag string         `gorm:"index"` // 'vip', 'general', 'speaker'
 }

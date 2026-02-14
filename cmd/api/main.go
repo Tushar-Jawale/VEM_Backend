@@ -4,6 +4,9 @@ import (
 	"log"
 	"os"
 
+	"github.com/akashtripathi12/TBO_Backend/internal/config"
+	"github.com/akashtripathi12/TBO_Backend/internal/handlers"
+	"github.com/akashtripathi12/TBO_Backend/internal/routes"
 	"github.com/akashtripathi12/TBO_Backend/internal/store"
 
 	"github.com/gofiber/fiber/v2"
@@ -16,7 +19,18 @@ func main() {
 	// Initialize Store
 	store.InitDB()
 
+	// Initialize Config
+	cfg := &config.Config{
+		Env: os.Getenv("ENV"), // Default to empty or set based on .env
+	}
+
+	// Initialize Repository
+	repo := handlers.NewRepository(cfg, store.DB)
+
 	app := fiber.New()
+
+	// Setup Routes
+	routes.SetupRoutes(app, cfg, repo)
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.SendString("TBO Backend Operational 🚀")
