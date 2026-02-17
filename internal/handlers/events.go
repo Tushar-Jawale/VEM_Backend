@@ -2,31 +2,21 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/akashtripathi12/TBO_Backend/internal/models"
+	"github.com/akashtripathi12/TBO_Backend/internal/queue"
 	"github.com/akashtripathi12/TBO_Backend/internal/store"
 	"github.com/akashtripathi12/TBO_Backend/internal/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
-
-// Helper to generate a random password
-func generateRandomPassword(n int) (string, error) {
-	b := make([]byte, n)
-	_, err := rand.Read(b)
-	if err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(b)[:n], nil
-}
 
 func (m *Repository) GetEvents(c *fiber.Ctx) error {
 	userID := c.Locals("userID")
@@ -386,15 +376,10 @@ func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
 	// Check if a user with this email already exists
 	if err := tx.Where("email = ?", req.Email).First(&user).Error; err != nil {
 		// If user does not exist, create a new one
-		if err.Error() == "record not found" {
-			// Generate valid random password
-			generatedPwd, err := generateRandomPassword(12)
-			if err != nil {
-				tx.Rollback()
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate password")
-			}
-			tempPassword = generatedPwd
-
+		if err == gorm.ErrRecordNotFound {
+			log.Printf("👤 Creating new head guest user: %s", req.Email)
+			// Create new user
+			tempPassword = utils.GenerateTempPassword()
 			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(tempPassword), bcrypt.DefaultCost)
 			if err != nil {
 				tx.Rollback()
@@ -402,12 +387,12 @@ func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
 			}
 
 			user = models.User{
-				ID:           uuid.New(), // Explicitly generate UUID
+				ID:           uuid.New(),
 				Email:        req.Email,
 				Role:         "head_guest",
 				Name:         req.Name,
 				Phone:        req.Phone,
-				PasswordHash: string(hashedPassword), // Placeholder
+				PasswordHash: string(hashedPassword),
 			}
 
 			if err := tx.Create(&user).Error; err != nil {
@@ -419,6 +404,7 @@ func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to query user: "+err.Error())
 		}
 	} else {
+		log.Printf("👤 User already exists: %s", req.Email)
 		// If user exists, update their details if necessary and ensure role is head_guest
 		if user.Role != "head_guest" {
 			user.Role = "head_guest"
@@ -477,15 +463,45 @@ func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
 	}
 
 	// Invalidate cache
-	utils.Invalidate(context.Background(), fmt.Sprintf("events:id:%s", id))
+	utils.Invalidate(context.Background(),
+		fmt.Sprintf("events:id:%s", id),
+		fmt.Sprintf("events:agent:%s", event.AgentID.String()),
+	)
 
-	response := fiber.Map{
-		"message": "Head Guest Assigned Successfully",
-		"user":    user,
-	}
+	// Send Email with Credentials if new user
 	if tempPassword != "" {
-		response["tempPassword"] = tempPassword
+		subject := fmt.Sprintf("Head Guest Access - %s", event.Name)
+		body := fmt.Sprintf(`
+			<h1>Welcome to %s!</h1>
+			<p>You have been assigned as the Head Guest.</p>
+			<p><strong>Login Details:</strong></p>
+			<ul>
+				<li>Email: %s</li>
+				<li>Password: %s</li>
+			</ul>
+			<p>Please login to manage the event.</p>
+		`, event.Name, user.Email, tempPassword)
+
+		task, err := queue.NewEmailTask(user.Email, subject, body)
+		if err == nil {
+			if m.QueueClient != nil {
+				if _, err := m.QueueClient.Enqueue(task); err != nil {
+					log.Printf("❌ Failed to enqueue task: %v", err)
+				} else {
+					log.Printf("📧 Queued credential email for %s", user.Email)
+				}
+			} else {
+				log.Println("❌ QueueClient is nil!")
+			}
+		} else {
+			log.Printf("❌ Failed to create email task: %v", err)
+		}
+	} else {
+		log.Printf("ℹ️ Skipping email for existing user %s (no temp password generated)", user.Email)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, response)
+	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
+		"message": "Head Guest Assigned Successfully. Credentials sent via email.",
+		"user":    user,
+	})
 }

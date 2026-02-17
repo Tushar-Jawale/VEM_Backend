@@ -15,6 +15,7 @@ type Config struct {
 	AllowedOrigins []string
 	TrustedProxies []string
 	EnableLogger   bool
+	FrontendURL    string
 	RedisAddr      string
 	RedisPass      string
 	RedisDB        int
@@ -31,6 +32,11 @@ func Load() *Config {
 		env = "development"
 	}
 
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+
 	return &Config{
 		Port:           ":" + port,
 		Env:            env,
@@ -40,6 +46,7 @@ func Load() *Config {
 		AllowedOrigins: []string{"*"},   // TODO: Restrict in production
 		TrustedProxies: []string{},
 		EnableLogger:   true,
+		FrontendURL:    frontendURL,
 		RedisAddr:      os.Getenv("REDIS_ADDR"),
 		RedisPass:      os.Getenv("REDIS_PASS"),
 		RedisDB:        getEnvInt("REDIS_DB", 0),
