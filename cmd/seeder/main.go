@@ -148,7 +148,8 @@ func main() {
 	// 5. Seed Hotels (50 hotels)
 	log.Println("🏨 Seeding 50 Hotels...")
 	hotelNames := []string{"Grand", "Royal", "Palace", "Residency", "Heritage", "Luxury", "Budget", "Plaza", "Continental", "Imperial"}
-	hotelTypes := []string{"Plaza", "Suites", "Inn", "Resort", "Towers", "Gardens", "Boutique"}
+	hotelTypes := []string{"Plaza", "Suites", "Inn", "Resort", "Towers", "Gardens", "Boutique", "Villa"}
+	propertyTypes := []string{"Hotel", "Resort", "Villa", "Apartment", "Hostel"}
 
 	// Realistic Unsplash Hotel Images
 	hotelImages := []string{
@@ -169,22 +170,77 @@ func main() {
 		name := fmt.Sprintf("%s %s %d", hotelNames[rand.Intn(len(hotelNames))], hotelTypes[rand.Intn(len(hotelTypes))], i)
 		starRating := rand.Intn(3) + 3    // 3 to 5 stars
 		occupancy := rand.Intn(501) + 500 // 500 to 1000
+		propType := propertyTypes[rand.Intn(len(propertyTypes))]
 
-		facilities, _ := json.Marshal([]string{"WiFi", "Pool", "Restaurant", "Gym", "Spa", "Valet Parking"})
+		// Facilities
+		facilitiesList := []string{"WiFi", "Pool", "Restaurant", "Gym", "Spa", "Valet Parking"}
+		if rand.Float32() > 0.5 {
+			facilitiesList = append(facilitiesList, "Bar", "Nightclub")
+		}
+		// Add Religious/Cultural facilities
+		if rand.Float32() > 0.7 {
+			facilitiesList = append(facilitiesList, "Prayer Room")
+		}
+		if rand.Float32() > 0.8 {
+			facilitiesList = append(facilitiesList, "Kids Club", "Playground")
+		}
+		// Add Master List Items (Sustainability, Accessibility, Themes)
+		if rand.Float32() > 0.7 {
+			facilitiesList = append(facilitiesList, "Eco-friendly", "Green Certified")
+		}
+		if rand.Float32() > 0.6 {
+			facilitiesList = append(facilitiesList, "Wheelchair Accessible", "Ground Floor Access", "Roll-in Shower")
+		}
+		if rand.Float32() > 0.8 {
+			facilitiesList = append(facilitiesList, "Co-working Space", "High-speed Upload")
+		}
+
+		facilities, _ := json.Marshal(facilitiesList)
+
+		// Policies
+		policiesMap := map[string]interface{}{
+			"alcohol":       "allowed",
+			"late_night":    true,
+			"pets":          false,
+			"outside_cake":  true,
+			"outside_decor": true,
+		}
+		if rand.Float32() > 0.7 {
+			policiesMap["pets"] = true
+		}
+		if rand.Float32() > 0.8 {
+			policiesMap["alcohol"] = "restricted"
+		}
+		policies, _ := json.Marshal(policiesMap)
+
+		// Location Tags
+		locTags := []string{"City Center"}
+		if rand.Float32() > 0.6 {
+			locTags = append(locTags, "Near Metro")
+		}
+		if rand.Float32() > 0.8 {
+			locTags = append(locTags, "Near Beach")
+		}
+		locationTags, _ := json.Marshal(locTags)
 
 		// Use a specific image and a few random ones for each hotel
 		imgURL := hotelImages[rand.Intn(len(hotelImages))] + "?auto=format&fit=crop&w=800&q=80"
 		imageUrls, _ := json.Marshal([]string{imgURL, "https://images.unsplash.com/photo-1566665797739-1674de7a421a?auto=format&fit=crop&w=800&q=80"})
 
 		h := models.Hotel{
-			ID:         fmt.Sprintf("HOTEL%03d", i),
-			CityID:     "DEL",
-			Name:       name,
-			StarRating: starRating,
-			Address:    fmt.Sprintf("Address Line %d, New Delhi - 110001", i),
-			Facilities: datatypes.JSON(facilities),
-			ImageUrls:  datatypes.JSON(imageUrls),
-			Occupancy:  occupancy,
+			ID:           fmt.Sprintf("HOTEL%03d", i),
+			CityID:       "DEL",
+			Name:         name,
+			StarRating:   starRating,
+			UserRating:   float64(rand.Intn(20)+80) / 10.0, // 8.0 to 9.9
+			ReviewCount:  rand.Intn(500) + 50,
+			PropertyType: propType,
+			Address:      fmt.Sprintf("Address Line %d, New Delhi - 110001", i),
+			Facilities:   datatypes.JSON(facilities),
+			Policies:     datatypes.JSON(policies),
+			LocationTags: datatypes.JSON(locationTags),
+			ImageUrls:    datatypes.JSON(imageUrls),
+			Occupancy:    occupancy,
 		}
 		db.Create(&h)
 		if i == 1 {
@@ -193,239 +249,227 @@ func main() {
 
 		// 6. Seed Room Offers for each hotel
 		roomTypes := []struct {
-			Name     string
-			Capacity int
-			BaseFare float64
+			Name      string
+			Capacity  int
+			BaseFare  float64
+			Amenities []string
 		}{
-			{"Standard Room", 2, 3000.0},
-			{"Deluxe Room", 3, 5000.0},
-			{"Executive Suite", 4, 8000.0},
-			{"Presidential Suite", 5, 15000.0},
+			{"Standard Room", 2, 3000.0, []string{"WiFi", "TV", "AC"}},
+			{"Deluxe Room", 3, 5000.0, []string{"WiFi", "TV", "AC", "Balcony", "Mini Bar"}},
+			{"Executive Suite", 4, 8000.0, []string{"WiFi", "TV", "AC", "Bathtub", "Kitchenette"}},
+			{"Presidential Suite", 5, 15000.0, []string{"WiFi", "TV", "AC", "Jacuzzi", "Private Pool", "Butler Service"}},
 		}
 
 		for _, rt := range roomTypes {
-			count := rand.Intn(51) + 50 // 50 to 100
+			// Randomly skip some room types to vary inventory
+			if rand.Float32() > 0.8 {
+				continue
+			}
+
+			count := rand.Intn(51) + 20 // 20 to 70
 			fare := rt.BaseFare + float64(rand.Intn(1000))
+			amenitiesJSON, _ := json.Marshal(rt.Amenities)
 
 			db.Create(&models.RoomOffer{
-				ID:          uuid.New().String(),
-				HotelID:     h.ID,
-				Name:        rt.Name,
-				BookingCode: fmt.Sprintf("BOOK-%s-%s", h.ID, rt.Name[:3]),
-				MaxCapacity: rt.Capacity,
-				TotalFare:   fare,
-				Currency:    "INR",
-				Count:       count,
+				ID:           uuid.New().String(),
+				HotelID:      h.ID,
+				Name:         rt.Name,
+				BookingCode:  fmt.Sprintf("BOOK-%s-%s", h.ID, rt.Name[:3]),
+				MaxCapacity:  rt.Capacity,
+				TotalFare:    fare,
+				Currency:     "INR",
+				Count:        count,
+				Amenities:    datatypes.JSON(amenitiesJSON),
+				IsRefundable: rand.Float32() > 0.3, // 70% chance of being refundable
 			})
 		}
 
-		// 7. Seed Banquets and Catering for every 4th hotel (25%)
-		if i%4 == 0 {
+		// 7. Seed Banquets and Catering for every 3rd hotel (33%)
+		if i%3 == 0 {
 			banquetImages, _ := json.Marshal([]string{
 				"https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=800&q=80",
 				"https://images.unsplash.com/photo-1511795409834-ef04bbd61622?auto=format&fit=crop&w=800&q=80",
 			})
+			features, _ := json.Marshal([]string{"AV", "Projector", "Sound System", "Stage"})
 
 			db.Create(&models.BanquetHall{
 				HotelID:     h.ID,
 				Name:        "Crystal Ballroom",
+				HallType:    "Ballroom",
 				Capacity:    300 + rand.Intn(201), // 300-500
 				PricePerDay: 50000.0 + float64(rand.Intn(20000)),
+				Length:      100,
+				Width:       50,
+				Height:      20,
+				Area:        5000,
+				Features:    datatypes.JSON(features),
 				ImageUrls:   datatypes.JSON(banquetImages),
 			})
 
 			loungeImages, _ := json.Marshal([]string{
 				"https://images.unsplash.com/photo-1541336032412-2048a678540d?auto=format&fit=crop&w=800&q=80",
 			})
+			lawnFeatures, _ := json.Marshal([]string{"Open Air", "Gazebo"})
 
 			db.Create(&models.BanquetHall{
 				HotelID:     h.ID,
-				Name:        "Executive Lounge",
-				Capacity:    50 + rand.Intn(51), // 50-100
-				PricePerDay: 20000.0 + float64(rand.Intn(5000)),
+				Name:        "Sunset Lawn",
+				HallType:    "Lawn",
+				Capacity:    500 + rand.Intn(500), // 500-1000
+				PricePerDay: 80000.0 + float64(rand.Intn(30000)),
+				Area:        10000,
+				Features:    datatypes.JSON(lawnFeatures),
 				ImageUrls:   datatypes.JSON(loungeImages),
 			})
+
+			// Catering
 			cateringImages, _ := json.Marshal([]string{
 				"https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=800&q=80",
-				"https://images.unsplash.com/photo-1544333346-64e4fe1f8ff2?auto=format&fit=crop&w=800&q=80",
 			})
+			dietaryVeg, _ := json.Marshal([]string{"Veg", "Jain"})
+			dietaryMixed, _ := json.Marshal([]string{"Veg", "Non-Veg", "Halal"})
+			dietaryKosher, _ := json.Marshal([]string{"Kosher", "Gluten-Free"})
 
 			db.Create(&models.CateringMenu{
 				HotelID:       h.ID,
-				Name:          "Premium Wedding Menu",
-				Type:          "mixed",
-				PricePerPlate: 1500.0,
+				Name:          "Royal Veg Feast",
+				Type:          "veg",
+				PricePerPlate: 1200.0,
+				DietaryTags:   datatypes.JSON(dietaryVeg),
 				ImageUrls:     datatypes.JSON(cateringImages),
 			})
 
-			buffetImages, _ := json.Marshal([]string{
-				"https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80",
-			})
-
 			db.Create(&models.CateringMenu{
 				HotelID:       h.ID,
-				Name:          "Corporate Buffet",
-				Type:          "veg",
-				PricePerPlate: 800.0,
-				ImageUrls:     datatypes.JSON(buffetImages),
+				Name:          "Premium Global Buffet",
+				Type:          "mixed",
+				PricePerPlate: 1800.0,
+				DietaryTags:   datatypes.JSON(dietaryMixed),
+				ImageUrls:     datatypes.JSON(cateringImages),
 			})
+
+			// Add a specialized menu for some hotels
+			if i%5 == 0 {
+				db.Create(&models.CateringMenu{
+					HotelID:       h.ID,
+					Name:          "Strictly Kosher Selection",
+					Type:          "special",
+					PricePerPlate: 2500.0,
+					DietaryTags:   datatypes.JSON(dietaryKosher),
+					ImageUrls:     datatypes.JSON(cateringImages),
+				})
+			}
 		}
 	}
 
 	// 8. Seed Main Event
 	log.Println("📅 Seeding Main Event...")
 	var roomOffers []models.RoomOffer
-	db.Where("hotel_id = ?", firstHotel.ID).Find(&roomOffers)
+	if firstHotel.ID != "" {
+		db.Where("hotel_id = ?", firstHotel.ID).Find(&roomOffers)
 
-	var invItems []RoomsInventoryItem
-	for _, ro := range roomOffers {
-		invItems = append(invItems, RoomsInventoryItem{
-			RoomOfferID:  ro.ID,
-			RoomName:     ro.Name,
-			Available:    ro.Count,
-			MaxCapacity:  ro.MaxCapacity,
-			PricePerRoom: int(ro.TotalFare),
-		})
-	}
-	invJSON, _ := json.Marshal(invItems)
-
-	event := models.Event{
-		ID:             uuid.New(),
-		AgentID:        agentUser.ID,
-		HeadGuestID:    headGuestUser.ID,
-		HotelID:        firstHotel.ID,
-		Name:           "Global Tech Summit 2026",
-		Location:       "New Delhi, India",
-		RoomsInventory: datatypes.JSON(invJSON),
-		Status:         "active",
-		StartDate:      time.Now().AddDate(0, 1, 0),
-		EndDate:        time.Now().AddDate(0, 1, 4),
-	}
-	db.Create(&event)
-
-	// 9. Seed 500 Guests for the event
-	log.Println("👥 Seeding 500 Guests organized in families...")
-	guestCount := 0
-	for guestCount < 500 {
-		familyID := uuid.New()
-		familySize := rand.Intn(5) + 1 // 1 to 5 members
-		if guestCount+familySize > 500 {
-			familySize = 500 - guestCount
+		var invItems []RoomsInventoryItem
+		for _, ro := range roomOffers {
+			invItems = append(invItems, RoomsInventoryItem{
+				RoomOfferID:  ro.ID,
+				RoomName:     ro.Name,
+				Available:    ro.Count,
+				MaxCapacity:  ro.MaxCapacity,
+				PricePerRoom: int(ro.TotalFare),
+			})
 		}
+		invJSON, _ := json.Marshal(invItems)
 
-		for j := 0; j < familySize; j++ {
-			age := 5 + rand.Intn(60)
-			gType := "adult"
-			if age < 12 {
-				gType = "child"
+		event := models.Event{
+			ID:             uuid.New(),
+			AgentID:        agentUser.ID,
+			HeadGuestID:    headGuestUser.ID,
+			HotelID:        firstHotel.ID,
+			Name:           "Global Tech Summit 2026",
+			Location:       "New Delhi, India",
+			RoomsInventory: datatypes.JSON(invJSON),
+			Status:         "active",
+			StartDate:      time.Now().AddDate(0, 1, 0),
+			EndDate:        time.Now().AddDate(0, 1, 4),
+		}
+		db.Create(&event)
+
+		// 11. Seed Global Flights
+		flights := seedGlobalFlights(db)
+
+		// 12. Seed Global Transfers
+		transfers := seedGlobalTransfers(db)
+
+		// 13. Seed Cart Data (linked to bookings)
+		log.Println("🛒 Seeding Cart with Flight and Transfer Bookings...")
+
+		// Find one flight to book
+		if len(flights) > 0 {
+			flight := flights[0]
+			fb := models.FlightBooking{
+				FlightID:    flight.ID,
+				EventID:     event.ID,
+				SeatsBooked: 2,
+				PriceLocked: flight.BasePrice,
+				Status:      "pending",
+				BookedBy:    headGuestUser.ID,
 			}
+			db.Create(&fb)
 
-			guest := models.Guest{
-				ID:            uuid.New(),
-				Name:          fmt.Sprintf("Guest %d", guestCount+1),
-				Age:           age,
-				Type:          gType,
-				Phone:         fmt.Sprintf("+91-90000%05d", guestCount),
-				Email:         fmt.Sprintf("guest%d@demo.com", guestCount),
-				EventID:       event.ID,
-				FamilyID:      familyID,
-				ArrivalDate:   event.StartDate,
-				DepartureDate: event.EndDate,
+			cartItemF := models.CartItem{
+				EventID:         event.ID,
+				Type:            "flight",
+				RefID:           flight.ID.String(),
+				FlightBookingID: &fb.ID,
+				Status:          "wishlist",
+				Quantity:        2,
+				LockedPrice:     flight.BasePrice,
+				AddedBy:         headGuestUser.ID,
 			}
-			db.Create(&guest)
-			guestCount++
+			db.Create(&cartItemF)
+			log.Printf("   ✓ Added Flight Booking to Cart: %s (%s)", fb.ID, flight.FlightNumber)
+		}
 
-			// 10. Randomly allocate ~100 guests to show status
-			if guestCount <= 100 {
-				ro := roomOffers[rand.Intn(len(roomOffers))]
-				db.Create(&models.GuestAllocation{
-					ID:           uuid.New(),
-					EventID:      event.ID,
-					GuestID:      guest.ID,
-					RoomOfferID:  &ro.ID,
-					LockedPrice:  ro.TotalFare,
-					Status:       "allocated",
-					AssignedMode: "agent_manual",
-				})
+		// Find one transfer to book
+		if len(transfers) > 0 {
+			transfer := transfers[0]
+			tb := models.TransferBooking{
+				TransferID:     transfer.ID,
+				EventID:        event.ID,
+				CabsBooked:     1,
+				PriceLocked:    transfer.BasePricePerCab,
+				PickupLocation: "Airport",
+				DropLocation:   "Hotel",
+				Status:         "pending",
+				BookedBy:       headGuestUser.ID,
 			}
+			db.Create(&tb)
+
+			cartItemT := models.CartItem{
+				EventID:           event.ID,
+				Type:              "transfer",
+				RefID:             transfer.ID.String(),
+				TransferBookingID: &tb.ID,
+				Status:            "wishlist",
+				Quantity:          1,
+				LockedPrice:       transfer.BasePricePerCab,
+				AddedBy:           headGuestUser.ID,
+			}
+			db.Create(&cartItemT)
+			log.Printf("   ✓ Added Transfer Booking to Cart: %s (%s)", tb.ID, transfer.CarModel)
 		}
+
+		log.Println("🎉 DEMO SEEDING COMPLETED!")
+		log.Printf("📊 Summary:")
+		log.Printf("   - Users: 2 (1 Agent, 1 Head Guest)")
+		log.Printf("   - Hotels: 50")
+		log.Printf("   - Room Offers: %d", len(roomOffers)*50) // Approx
+		log.Printf("   - Events: 1 (%s)", event.Name)
+		log.Printf("   - Flights: %d", len(flights))
+		log.Printf("   - Transfers: %d", len(transfers))
+	} else {
+		log.Println("❌ Failed to create any hotels, skipping event creation.")
 	}
-
-	// 11. Seed Global Flights
-	flights := seedGlobalFlights(db)
-
-	// 12. Seed Global Transfers
-	transfers := seedGlobalTransfers(db)
-
-	// 13. Seed Cart Data (linked to bookings)
-	log.Println("🛒 Seeding Cart with Flight and Transfer Bookings...")
-
-	// Find one flight to book
-	if len(flights) > 0 {
-		flight := flights[0]
-		fb := models.FlightBooking{
-			FlightID:    flight.ID,
-			EventID:     event.ID,
-			SeatsBooked: 2,
-			PriceLocked: flight.BasePrice,
-			Status:      "pending",
-			BookedBy:    headGuestUser.ID,
-		}
-		db.Create(&fb)
-
-		cartItemF := models.CartItem{
-			EventID:         event.ID,
-			Type:            "flight",
-			RefID:           flight.ID.String(),
-			FlightBookingID: &fb.ID,
-			Status:          "wishlist",
-			Quantity:        2,
-			LockedPrice:     flight.BasePrice,
-			AddedBy:         headGuestUser.ID,
-		}
-		db.Create(&cartItemF)
-		log.Printf("   ✓ Added Flight Booking to Cart: %s (%s)", fb.ID, flight.FlightNumber)
-	}
-
-	// Find one transfer to book
-	if len(transfers) > 0 {
-		transfer := transfers[0]
-		tb := models.TransferBooking{
-			TransferID:     transfer.ID,
-			EventID:        event.ID,
-			CabsBooked:     1,
-			PriceLocked:    transfer.BasePricePerCab,
-			PickupLocation: "Airport",
-			DropLocation:   "Hotel",
-			Status:         "pending",
-			BookedBy:       headGuestUser.ID,
-		}
-		db.Create(&tb)
-
-		cartItemT := models.CartItem{
-			EventID:           event.ID,
-			Type:              "transfer",
-			RefID:             transfer.ID.String(),
-			TransferBookingID: &tb.ID,
-			Status:            "wishlist",
-			Quantity:          1,
-			LockedPrice:       transfer.BasePricePerCab,
-			AddedBy:           headGuestUser.ID,
-		}
-		db.Create(&cartItemT)
-		log.Printf("   ✓ Added Transfer Booking to Cart: %s (%s)", tb.ID, transfer.CarModel)
-	}
-
-	log.Println("🎉 DEMO SEEDING COMPLETED!")
-	log.Printf("📊 Summary:")
-	log.Printf("   - Users: 2 (1 Agent, 1 Head Guest)")
-	log.Printf("   - Hotels: 50")
-	log.Printf("   - Room Offers: 200")
-	log.Printf("   - Events: 1 (%s)", event.Name)
-	log.Printf("   - Guests: 500")
-	log.Printf("   - Allocations: 100")
-	log.Printf("   - Flights: %d", len(flights))
-	log.Printf("   - Transfers: %d", len(transfers))
 }
 
 // seedGlobalFlights seeds global flights (not tied to any event) and returns them

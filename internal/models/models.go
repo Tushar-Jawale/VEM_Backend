@@ -97,6 +97,13 @@ type Hotel struct {
 	ImageUrls  datatypes.JSON `gorm:"type:jsonb" json:"image_urls"` // Stores ["url1.jpg", "url2.jpg"]
 	Occupancy  int            `gorm:"default:500" json:"occupancy"`
 
+	// Added Filters
+	PropertyType string         `gorm:"default:'Hotel'" json:"property_type"` // Hotel, Resort, Villa
+	UserRating   float64        `gorm:"default:0" json:"user_rating"`         // 0-10
+	ReviewCount  int            `gorm:"default:0" json:"review_count"`
+	Policies     datatypes.JSON `gorm:"type:jsonb" json:"policies"`      // { "alcohol": "allowed", "late_night": true }
+	LocationTags datatypes.JSON `gorm:"type:jsonb" json:"location_tags"` // ["Near Beach", "City Center"]
+
 	// Relations
 	Rooms    []RoomOffer    `gorm:"foreignKey:HotelID" json:"rooms"`
 	Banquets []BanquetHall  `gorm:"foreignKey:HotelID" json:"banquets"`
@@ -116,6 +123,7 @@ type RoomOffer struct {
 	IsRefundable   bool           `gorm:"default:false" json:"is_refundable"`
 	CancelPolicies datatypes.JSON `gorm:"type:jsonb" json:"cancel_policies"` // Stores the complex policy array
 	Count          int            `gorm:"default:100" json:"count"`
+	Amenities      datatypes.JSON `gorm:"type:jsonb" json:"amenities"` // ["Bathtub", "Balcony"]
 }
 
 // 5. Banquet Halls
@@ -126,6 +134,14 @@ type BanquetHall struct {
 	Capacity    int            `gorm:"not null" json:"capacity"`
 	PricePerDay float64        `gorm:"type:decimal(10,2)" json:"price_per_day"`
 	ImageUrls   datatypes.JSON `gorm:"type:jsonb" json:"image_urls"`
+
+	// Added Filters
+	HallType string         `gorm:"default:'Ballroom'" json:"hall_type"` // Ballroom, Lawn, Poolside
+	Length   float64        `json:"length"`
+	Width    float64        `json:"width"`
+	Height   float64        `json:"height"`
+	Area     float64        `json:"area"`                       // sq ft
+	Features datatypes.JSON `gorm:"type:jsonb" json:"features"` // ["AV", "Projector"]
 }
 
 // 6. Catering Menus
@@ -135,6 +151,7 @@ type CateringMenu struct {
 	Name          string         `gorm:"not null" json:"name"`      // "Gold Package"
 	Type          string         `gorm:"default:'veg'" json:"type"` // 'veg', 'non-veg'
 	PricePerPlate float64        `gorm:"type:decimal(10,2)" json:"price_per_plate"`
+	DietaryTags   datatypes.JSON `gorm:"type:jsonb" json:"dietary_tags"` // ["Veg", "Halal"]
 	ImageUrls     datatypes.JSON `gorm:"type:jsonb" json:"image_urls"`
 }
 
