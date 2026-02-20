@@ -2,14 +2,13 @@ package main
 
 import (
 	"log"
-	"os"
+	"strings" // Added for joining allowed origins
 
 	"github.com/akashtripathi12/TBO_Backend/internal/config"
 	"github.com/akashtripathi12/TBO_Backend/internal/handlers"
+	"github.com/akashtripathi12/TBO_Backend/internal/queue"
 	"github.com/akashtripathi12/TBO_Backend/internal/routes"
 	"github.com/akashtripathi12/TBO_Backend/internal/store"
-
-	"github.com/akashtripathi12/TBO_Backend/internal/queue"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/hibiken/asynq"
@@ -17,33 +16,34 @@ import (
 )
 
 func main() {
+	// 1. Load Environment Variables from .env file (if it exists)
 	godotenv.Load()
 
-	// Load Config
+	// 2. Load Centralized Config (All os.Getenv happens INSIDE here)
 	cfg := config.Load()
 
 	// Initialize Store
 	store.InitDB()
-	log.Println("✅ DB Connected. URL:", os.Getenv("DATABASE_URL"))
+	log.Println("✅ DB Connected")
 
 	// Initialize Redis
 	store.InitRedis(cfg)
 
-	// --- Asynq Redis Config ---
-	redisAddr := "127.0.0.1:6379"
-	if val := os.Getenv("REDIS_URL"); val != "" {
-		redisAddr = val
+	// --- Asynq Redis Config (Using cfg!) ---
+	// Make sure your config.go maps REDIS_URL to cfg.RedisAddr
+	redisOpt, err := asynq.ParseRedisURI(cfg.RedisAddr)
+	if err != nil {
+		log.Fatalf("❌ Invalid Redis URL: %v", err)
 	}
-	redisOpt := asynq.RedisClientOpt{Addr: redisAddr}
 
-	// 1. Initialize Asynq Client (Producer)
+	// Initialize Asynq Client (Producer)
 	client := asynq.NewClient(redisOpt)
 	defer client.Close()
 
 	// Initialize Repository with Queue Client
 	repo := handlers.NewRepository(cfg, store.DB, client)
 
-	// 2. Initialize Asynq Server (Consumer)
+	// Initialize Asynq Server (Consumer)
 	srv := asynq.NewServer(
 		redisOpt,
 		asynq.Config{
@@ -68,9 +68,9 @@ func main() {
 
 	app := fiber.New()
 
-	// Enable CORS
+	// Enable CORS (Using cfg!)
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*", // For development
+		AllowOrigins: strings.Join(cfg.AllowedOrigins, ", "),
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
@@ -81,10 +81,6 @@ func main() {
 		return c.SendString("TBO Backend Operational 🚀")
 	})
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	log.Fatal(app.Listen(":" + port))
+	// Start Server (Using cfg! Note: config.go already added the ":" to Port)
+	log.Fatal(app.Listen(cfg.Port))
 }

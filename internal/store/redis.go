@@ -17,13 +17,17 @@ func InitRedis(cfg *config.Config) {
 		return
 	}
 
-	RDB = redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPass,
-		DB:       cfg.RedisDB,
-	})
+	// --- FIX: Parse the full Redis URL instead of manually setting Options ---
+	opt, err := redis.ParseURL(cfg.RedisAddr)
+	if err != nil {
+		log.Fatalf("❌ Failed to parse Redis URL: %v", err)
+	}
 
-	_, err := RDB.Ping(ctx).Result()
+	// Initialize using the parsed options
+	RDB = redis.NewClient(opt)
+
+	// Test the connection
+	_, err = RDB.Ping(ctx).Result()
 	if err != nil {
 		log.Println("❌ Failed to connect to Redis:", err)
 	} else {
