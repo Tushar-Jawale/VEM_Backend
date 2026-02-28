@@ -15,7 +15,7 @@ type User struct {
 	Email        string       `gorm:"uniqueIndex;not null" json:"email"`
 	PasswordHash string       `gorm:"not null" json:"-"` // For custom auth
 	Phone        string       `json:"phone"`
-	Role         string       `gorm:"default:'head_guest'" json:"role"` // 'agent' or 'head_guest'
+	Role         string       `gorm:"default:'head_guest'" json:"role"` // 'agent', 'head_guest', 'tbo_agent'
 	AgentProfile AgentProfile `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"agent_profile"`
 }
 
@@ -62,9 +62,10 @@ type Event struct {
 	Status         string         `gorm:"default:'active'" json:"status"`
 	StartDate      time.Time      `json:"start_date"`
 	EndDate        time.Time      `json:"end_date"`
-
-	// Relations
-	CartItems []CartItem `gorm:"foreignKey:EventID" json:"cart_items,omitempty"`
+	Budget         *float64       `gorm:"type:decimal(10,2)" json:"budget"`
+	BudgetSpent    *float64       `gorm:"type:decimal(10,2);default:0" json:"budget_spent"`
+	Organizer      string         `gorm:"-" json:"organizer"`
+	CartItems      []CartItem     `gorm:"foreignKey:EventID" json:"cart_items,omitempty"`
 }
 
 // 1. Country Table (Global)

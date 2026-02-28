@@ -9,16 +9,18 @@ import (
 
 // NegotiationStatus enum
 const (
-	NegotiationStatusDraft           = "draft"
-	NegotiationStatusWaitingForAgent = "waiting_for_agent"
-	NegotiationStatusWaitingForHotel = "waiting_for_hotel"
-	NegotiationStatusLocked          = "locked"
+	NegotiationStatusDraft             = "draft"
+	NegotiationStatusWaitingForAgent   = "waiting_for_agent"
+	NegotiationStatusWaitingForTboAgent = "waiting_for_tbo_agent"
+	NegotiationStatusWaitingForHotel   = "waiting_for_hotel" // Deferred for later
+	NegotiationStatusLocked            = "locked"
 )
 
 // NegotiationModifier enum
 const (
-	NegotiationModifierAgent = "agent"
-	NegotiationModifierHotel = "hotel"
+	NegotiationModifierAgent    = "agent"
+	NegotiationModifierTboAgent = "tbo_agent"
+	NegotiationModifierHotel    = "hotel" // Deferred for later
 )
 
 // NegotiationReason enum

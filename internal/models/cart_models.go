@@ -20,12 +20,13 @@ type CartItem struct {
 	FlightBooking     *FlightBooking   `gorm:"foreignKey:FlightBookingID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"flight_booking,omitempty"`
 	TransferBookingID *uuid.UUID       `gorm:"type:uuid;index" json:"transfer_booking_id,omitempty"`
 	TransferBooking   *TransferBooking `gorm:"foreignKey:TransferBookingID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"transfer_booking,omitempty"`
-	Status            string           `gorm:"size:20;default:'wishlist';index" json:"status"` // 'wishlist', 'approved', 'booked'
-	Quantity          int              `gorm:"not null;default:1" json:"quantity"`             // Number of units
-	LockedPrice       float64          `gorm:"type:decimal(10,2)" json:"locked_price"`         // Price at time of adding
-	Notes             string           `gorm:"type:text" json:"notes,omitempty"`               // Optional notes
-	AddedBy           uuid.UUID        `gorm:"type:uuid;index" json:"added_by"`                // User who added this item
-	User              User             `gorm:"foreignKey:AddedBy" json:"-"`                    // Reference to user who added
+	Status            string           `gorm:"size:20;default:'wishlist';index" json:"status"`   // 'wishlist', 'approved', 'booked'
+	Quantity          int              `gorm:"not null;default:1" json:"quantity"`               // Number of units
+	LockedPrice       float64          `gorm:"type:decimal(10,2)" json:"locked_price"`           // Price at time of adding
+	TaxAndFees        float64          `gorm:"type:decimal(10,2);default:0" json:"tax_and_fees"` // Taxes and fees
+	Notes             string           `gorm:"type:text" json:"notes,omitempty"`                 // Optional notes
+	AddedBy           uuid.UUID        `gorm:"type:uuid;index" json:"added_by"`                  // User who added this item
+	User              User             `gorm:"foreignKey:AddedBy" json:"-"`                      // Reference to user who added
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
 }
@@ -86,6 +87,8 @@ type CartItemDetail struct {
 	Status      string    `json:"status"`
 	Quantity    int       `json:"quantity"`
 	LockedPrice float64   `json:"locked_price"`
+	TaxAndFees  float64   `json:"tax_and_fees"`
+	RefID       string    `json:"ref_id"`
 	Notes       string    `json:"notes,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 

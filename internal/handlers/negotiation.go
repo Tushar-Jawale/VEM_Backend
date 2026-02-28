@@ -56,7 +56,7 @@ func (r *Repository) StartNegotiation(c *fiber.Ctx) error {
 	// 3. Create NegotiationSession
 	session := models.NegotiationSession{
 		EventID:      eventID,
-		Status:       models.NegotiationStatusWaitingForHotel,
+		Status:       models.NegotiationStatusWaitingForTboAgent,
 		CurrentRound: 1,
 	}
 
@@ -140,17 +140,19 @@ func (r *Repository) SubmitCounterOffer(c *fiber.Ctx) error {
 	}
 
 	// Determine who is modifying
-	modifier := models.NegotiationModifierHotel
+	// For now, if we are hitting this endpoint via ShareToken, it's the counterpart.
+	// We are replacing Hotel with TBO Agent.
+	modifier := models.NegotiationModifierTboAgent
 	// Check if Agent (authenticated user)
 	// user := c.Locals("user") ...
 	// Logic to switch status based on who's calling.
 	// Requirement: "Turn Switch: Update status to WAITING_FOR_AGENT" implied Hotel is calling.
 
 	var nextStatus string
-	if modifier == models.NegotiationModifierHotel {
+	if modifier == models.NegotiationModifierTboAgent {
 		nextStatus = models.NegotiationStatusWaitingForAgent
 	} else {
-		nextStatus = models.NegotiationStatusWaitingForHotel
+		nextStatus = models.NegotiationStatusWaitingForTboAgent
 	}
 
 	// 2. Fetch Previous Round (Latest)

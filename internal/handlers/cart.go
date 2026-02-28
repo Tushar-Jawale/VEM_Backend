@@ -18,17 +18,19 @@ import (
 // --- Request DTOs ---
 
 type AddToCartRequest struct {
-	Type     string `json:"type"`     // 'room', 'banquet', 'catering', 'flight', 'transfer'
-	RefID    string `json:"refId"`    // ID of the referenced item
-	Quantity int    `json:"quantity"` // Number of units (default: 1)
-	Notes    string `json:"notes"`    // Optional notes
-	Status   string `json:"status"`   // Optional status (default: 'wishlist')
+	Type       string  `json:"type"`         // 'room', 'banquet', 'catering', 'flight', 'transfer'
+	RefID      string  `json:"refId"`        // ID of the referenced item
+	Quantity   int     `json:"quantity"`     // Number of units (default: 1)
+	TaxAndFees float64 `json:"tax_and_fees"` // Taxes and fees
+	Notes      string  `json:"notes"`        // Optional notes
+	Status     string  `json:"status"`       // Optional status (default: 'wishlist')
 }
 
 type UpdateCartItemRequest struct {
-	Quantity *int    `json:"quantity,omitempty"` // Optional quantity update
-	Notes    *string `json:"notes,omitempty"`    // Optional notes update
-	Status   *string `json:"status,omitempty"`   // Optional status update
+	Quantity    *int     `json:"quantity,omitempty"`     // Optional quantity update
+	Notes       *string  `json:"notes,omitempty"`        // Optional notes update
+	Status      *string  `json:"status,omitempty"`       // Optional status update
+	LockedPrice *float64 `json:"locked_price,omitempty"` // Optional locked price update
 }
 
 // AddToCart adds an item to the event cart/wishlist
@@ -217,8 +219,27 @@ func (m *Repository) AddToCart(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid type. Must be: hotel, room, banquet, catering, flight, or transfer")
 	}
 
-	// Create cart item
+	// Create cart item — but first check for duplicate (upsert by quantity for rooms/banquets/catering/hotel)
 	eventUUID, _ := uuid.Parse(eventID)
+
+	if req.Type != "flight" && req.Type != "transfer" {
+		var existing models.CartItem
+		result := m.DB.Where("event_id = ? AND type = ? AND ref_id = ?", eventUUID, req.Type, req.RefID).First(&existing)
+		if result.Error == nil {
+			// Item already in cart — just increment quantity
+			newQty := existing.Quantity + req.Quantity
+			if err := m.DB.Model(&existing).Update("quantity", newQty).Error; err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update cart item quantity")
+			}
+			existing.Quantity = newQty
+			utils.Invalidate(context.Background(), fmt.Sprintf("cart:event:%s", eventID))
+			return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
+				"message": "Cart item quantity updated",
+				"item":    existing,
+			})
+		}
+	}
+
 	cartItem := models.CartItem{
 		EventID:           eventUUID,
 		Type:              req.Type,
@@ -229,6 +250,7 @@ func (m *Repository) AddToCart(c *fiber.Ctx) error {
 		Status:            req.Status,
 		Quantity:          req.Quantity,
 		LockedPrice:       lockedPrice,
+		TaxAndFees:        req.TaxAndFees,
 		Notes:             req.Notes,
 		AddedBy:           currentUserID,
 	}
@@ -243,6 +265,134 @@ func (m *Repository) AddToCart(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusCreated, fiber.Map{
 		"message": "Item added to cart successfully",
 		"item":    cartItem,
+	})
+}
+
+// BulkAddToCart adds multiple items to the event cart/wishlist in a single transaction
+func (m *Repository) BulkAddToCart(c *fiber.Ctx) error {
+	eventID := c.Params("id")
+	userID := c.Locals("userID")
+	if userID == nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
+	}
+	currentUserID, ok := userID.(uuid.UUID)
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Invalid User ID type")
+	}
+
+	// Validate event ID
+	eventUUID, err := uuid.Parse(eventID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid Event ID")
+	}
+
+	// Guard: Check Event Status
+	var event models.Event
+	if err := m.DB.Where("id = ?", eventID).First(&event).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Event not found")
+	}
+	if event.Status == "finalized" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Event is finalized and locked")
+	}
+
+	// Parse request array
+	var reqs []AddToCartRequest
+	if err := c.BodyParser(&reqs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if len(reqs) == 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No items provided")
+	}
+
+	var cartItems []models.CartItem
+	tx := m.DB.Begin()
+
+	// Process each request
+	for _, req := range reqs {
+		// Default quantity & status
+		if req.Quantity <= 0 {
+			req.Quantity = 1
+		}
+		if req.Status == "" {
+			req.Status = "wishlist"
+		}
+
+		var parentHotelID *string
+		var lockedPrice float64
+
+		// Note: To keep things simple and safe, we only allow rooms, banquets, catering, and hotels
+		// in the bulk hotel selection. Flights and transfers are complex and still need individual inventory updates
+		switch req.Type {
+		case "room":
+			var room models.RoomOffer
+			if err := tx.Where("id = ?", req.RefID).First(&room).Error; err != nil {
+				tx.Rollback()
+				return utils.ErrorResponse(c, fiber.StatusNotFound, fmt.Sprintf("Room offer not found: %s", req.RefID))
+			}
+			parentHotelID = &room.HotelID
+			lockedPrice = room.TotalFare
+		case "banquet":
+			var banquet models.BanquetHall
+			if err := tx.Where("id = ?", req.RefID).First(&banquet).Error; err != nil {
+				tx.Rollback()
+				return utils.ErrorResponse(c, fiber.StatusNotFound, "Banquet hall not found")
+			}
+			parentHotelID = &banquet.HotelID
+			lockedPrice = banquet.PricePerDay
+		case "catering":
+			var catering models.CateringMenu
+			if err := tx.Where("id = ?", req.RefID).First(&catering).Error; err != nil {
+				tx.Rollback()
+				return utils.ErrorResponse(c, fiber.StatusNotFound, "Catering menu not found")
+			}
+			parentHotelID = &catering.HotelID
+			lockedPrice = catering.PricePerPlate
+		case "hotel":
+			var hotel models.Hotel
+			if err := tx.Where("hotel_code = ?", req.RefID).First(&hotel).Error; err != nil {
+				tx.Rollback()
+				return utils.ErrorResponse(c, fiber.StatusNotFound, "Hotel not found")
+			}
+			parentHotelID = &hotel.ID
+			lockedPrice = 0
+		default:
+			tx.Rollback()
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Bulk add only supports hotel, room, banquet, and catering types")
+		}
+
+		cartItems = append(cartItems, models.CartItem{
+			EventID:       eventUUID,
+			Type:          req.Type,
+			RefID:         req.RefID,
+			ParentHotelID: parentHotelID,
+			Status:        req.Status,
+			Quantity:      req.Quantity,
+			LockedPrice:   lockedPrice,
+			TaxAndFees:    req.TaxAndFees,
+			Notes:         req.Notes,
+			AddedBy:       currentUserID,
+		})
+	}
+
+	// Bulk Insert
+	if len(cartItems) > 0 {
+		if err := tx.Create(&cartItems).Error; err != nil {
+			tx.Rollback()
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to add items to cart")
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to commit items")
+	}
+
+	// Invalidate Cache
+	utils.Invalidate(context.Background(), fmt.Sprintf("cart:event:%s", eventID))
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, fiber.Map{
+		"message": "Items added to cart successfully",
+		"items":   cartItems,
 	})
 }
 
@@ -354,6 +504,9 @@ func (m *Repository) UpdateCartItem(c *fiber.Ctx) error {
 	}
 	if req.Status != nil {
 		updates["status"] = *req.Status
+	}
+	if req.LockedPrice != nil {
+		updates["locked_price"] = *req.LockedPrice
 	}
 
 	// Apply updates
@@ -534,6 +687,42 @@ func (m *Repository) RemoveFromCart(c *fiber.Ctx) error {
 	})
 }
 
+// RemoveHotelGroupFromCart completely removes a hotel and all its nested children
+func (m *Repository) RemoveHotelGroupFromCart(c *fiber.Ctx) error {
+	eventID := c.Params("id")
+	hotelID := c.Params("hotelId") // The parent_hotel_id string
+
+	if _, err := uuid.Parse(eventID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid Event ID")
+	}
+
+	// Guard: Check Event Status
+	var event models.Event
+	if err := m.DB.Where("id = ?", eventID).First(&event).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Event not found")
+	}
+	if event.Status == "finalized" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Event is finalized and locked")
+	}
+
+	// Delete all cart items related to this event and having this hotel_id
+	// This hits both the base 'hotel' type (with RefID = hotelId) and subitems (ParentHotelID = hotelId)
+	result := m.DB.Where("event_id = ? AND (parent_hotel_id = ? OR (type = 'hotel' AND ref_id = ?))", eventID, hotelID, hotelID).
+		Delete(&models.CartItem{})
+
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to remove hotel group items")
+	}
+
+	// Invalidate Cache
+	utils.Invalidate(context.Background(), fmt.Sprintf("cart:event:%s", eventID))
+
+	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
+		"message":       "Hotel group removed successfully",
+		"items_deleted": result.RowsAffected,
+	})
+}
+
 // UpdateCartStatus approves all wishlist items (converts wishlist to approved cart)
 func (m *Repository) UpdateCartStatus(c *fiber.Ctx) error {
 	eventID := c.Params("id")
@@ -641,6 +830,8 @@ func (m *Repository) buildHierarchicalCartResponse(eventID string, cartItems []m
 				Status:      item.Status,
 				Quantity:    item.Quantity,
 				LockedPrice: item.LockedPrice,
+				TaxAndFees:  item.TaxAndFees,
+				RefID:       item.RefID,
 				Notes:       item.Notes,
 				CreatedAt:   item.CreatedAt,
 			}
@@ -658,6 +849,8 @@ func (m *Repository) buildHierarchicalCartResponse(eventID string, cartItems []m
 				Status:      item.Status,
 				Quantity:    item.Quantity,
 				LockedPrice: item.LockedPrice,
+				TaxAndFees:  item.TaxAndFees,
+				RefID:       item.RefID,
 				Notes:       item.Notes,
 				CreatedAt:   item.CreatedAt,
 			}
@@ -679,6 +872,8 @@ func (m *Repository) buildHierarchicalCartResponse(eventID string, cartItems []m
 			Status:      item.Status,
 			Quantity:    item.Quantity,
 			LockedPrice: item.LockedPrice,
+			TaxAndFees:  item.TaxAndFees,
+			RefID:       item.RefID,
 			Notes:       item.Notes,
 			CreatedAt:   item.CreatedAt,
 		}

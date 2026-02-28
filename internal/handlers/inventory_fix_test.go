@@ -38,7 +38,7 @@ func TestInventoryTotalPersistence(t *testing.T) {
 
 	// 2. Create Event VIA HANDLER (to test logic in CreateEvent)
 	app := fiber.New()
-	repo := handlers.NewRepository(nil, db) // cfg is not used for this
+	repo := handlers.NewRepository(nil, db, nil) // cfg is not used for this
 	app.Post("/events", middleware.Protected, repo.CreateEvent)
 	app.Post("/allocations", middleware.Protected, handlers.AllocateFamilyHandler(db))
 

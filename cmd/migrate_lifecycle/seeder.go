@@ -2,18 +2,25 @@ package main
 
 import (
 	"log"
+	"os"
 
-	"github.com/akashtripathi12/TBO_Backend/internal/config"
+	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 func main() {
-	// Load Config
-	cfg := config.LoadConfig()
+	// Load .env file
+	if err := godotenv.Load("../../.env"); err != nil {
+		godotenv.Load(".env") // fallback
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("❌ DATABASE_URL is not set")
+	}
 
 	// Connect to DB directly using GORM
-	dsn := "host=" + cfg.DBHost + " user=" + cfg.DBUser + " password=" + cfg.DBPassword + " dbname=" + cfg.DBName + " port=" + cfg.DBPort + " sslmode=disable"
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)

@@ -102,7 +102,7 @@ func setup() {
 
 	// Initialize Fiber App
 	cfg := &config.Config{Env: "test"}
-	repo := handlers.NewRepository(cfg, DB)
+	repo := handlers.NewRepository(cfg, DB, nil)
 	App = fiber.New()
 	routes.SetupRoutes(App, cfg, repo)
 

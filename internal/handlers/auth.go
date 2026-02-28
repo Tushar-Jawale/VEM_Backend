@@ -187,3 +187,35 @@ func (r *Repository) GetMe(c *fiber.Ctx) error {
 
 	return c.JSON(user)
 }
+
+// SeedTBOAgent is a temporary backdoor to create a TBO Agent for testing.
+func (r *Repository) SeedTBOAgent(c *fiber.Ctx) error {
+	var req SignupRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+
+	newUser := models.User{
+		ID:           uuid.New(),
+		Email:        req.Email,
+		PasswordHash: string(hashedPassword),
+		Role:         "tbo_agent", // explicitly defining this
+		Name:         req.Name,
+		Phone:        req.Phone,
+	}
+
+	if err := r.DB.Create(&newUser).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create TBO Agent user"})
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"message": "TBO Agent seeded successfully",
+		"user":    newUser,
+	})
+}

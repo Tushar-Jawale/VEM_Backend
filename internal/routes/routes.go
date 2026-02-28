@@ -67,8 +67,10 @@ func SetupRoutes(app *fiber.App, cfg *config.Config, repo *handlers.Repository) 
 	// Cart Routes
 	events.Get("/:id/cart", repo.GetEventCart)
 	events.Post("/:id/cart", repo.AddToCart)
+	events.Post("/:id/cart/bulk", repo.BulkAddToCart)
 	events.Patch("/:id/cart/:cartItemId", repo.UpdateCartItem)
 	events.Delete("/:id/cart/:cartItemId", repo.RemoveFromCart)
+	events.Delete("/:id/cart/hotel/:hotelId", repo.RemoveHotelGroupFromCart)
 	events.Post("/:id/cart/approve", repo.UpdateCartStatus)
 
 	// -----------------------------

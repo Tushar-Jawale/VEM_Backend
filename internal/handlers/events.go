@@ -24,6 +24,18 @@ func (m *Repository) GetEvents(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
+	// Define response struct locally for the handler
+	type EventResponse struct {
+		models.Event
+		GuestCount           int64    `json:"guestCount"`
+		InventoryConsumed    float64  `json:"inventoryConsumed"`
+		BudgetSpent          float64  `json:"budgetSpent"`
+		TotalBudget          *float64 `json:"totalBudget"`
+		DaysUntilEvent       int      `json:"daysUntilEvent"`
+		PendingActions       int      `json:"pendingActions"`
+		PendingActionDetails []string `json:"pendingActionDetails"`
+	}
+
 	// userID is stored as uuid.UUID in context by middleware
 	agentID, ok := userID.(uuid.UUID)
 	if !ok {
@@ -34,15 +46,17 @@ func (m *Repository) GetEvents(c *fiber.Ctx) error {
 	cacheKey := fmt.Sprintf("events:agent:%s", agentID.String())
 	ctx := context.Background()
 
+	var responseEvents []EventResponse
+
 	// 1. Try to get from Redis
 	if store.RDB != nil {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
-			if err := json.Unmarshal([]byte(cachedData), &events); err == nil {
+			if err := json.Unmarshal([]byte(cachedData), &responseEvents); err == nil {
 				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
 				return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 					"message": "Events Fetched Successfully (Cached)",
-					"events":  events,
+					"events":  responseEvents,
 				})
 			}
 		} else {
@@ -54,9 +68,89 @@ func (m *Repository) GetEvents(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch events")
 	}
 
+	// Fetch Agent Name
+	var agent models.User
+	agentName := "Agent"
+	if err := m.DB.Where("id = ?", agentID).First(&agent).Error; err == nil {
+		agentName = agent.Name
+	}
+
+	// 3. Decorate with Metrics
+	for _, evt := range events {
+		evt.Organizer = agentName
+		var guestCount int64
+		m.DB.Model(&models.Guest{}).Where("event_id = ?", evt.ID).Count(&guestCount)
+
+		var allocatedCount int64
+		m.DB.Model(&models.GuestAllocation{}).Where("event_id = ?", evt.ID).Count(&allocatedCount)
+
+		// Calculate basic inventory consumption %
+		// (Total allocated / Total Available)
+		var consumption float64 = 0.0
+		if len(evt.RoomsInventory) > 0 {
+			var totalRooms int = 0
+			// Unmarshal if JSON was read into a raw string, but it's datatypes.JSON
+			var rooms []RoomsInventoryItem
+			json.Unmarshal(evt.RoomsInventory, &rooms)
+
+			for _, rp := range rooms {
+				totalRooms += rp.Available // Or rp.Total
+			}
+			if totalRooms > 0 {
+				consumption = (float64(allocatedCount) / float64(totalRooms)) * 100
+			}
+		}
+
+		// Calculate Days Until Event
+		daysUntil := int(time.Until(evt.StartDate).Hours() / 24)
+
+		// Calculate Pending Actions (e.g. guests without allocations)
+		var pendingGuests int64
+		m.DB.Model(&models.Guest{}).
+			Joins("LEFT JOIN guest_allocations ON guests.id = guest_allocations.guest_id").
+			Where("guests.event_id = ? AND guest_allocations.id IS NULL", evt.ID).
+			Count(&pendingGuests)
+
+		// And maybe lacking a head guest
+		pendingActions := int(pendingGuests)
+		var pendingActionDetails []string
+		if pendingGuests > 0 {
+			pendingActionDetails = append(pendingActionDetails, fmt.Sprintf("%d guest(s) need room allocation", pendingGuests))
+		}
+		if evt.HeadGuestID == uuid.Nil {
+			pendingActions++
+			pendingActionDetails = append(pendingActionDetails, "Assign a Head Guest")
+		}
+
+		// Budget Spent: prefer stored value (set by Make Payment), else compute from allocations
+		var budgetSpent float64
+		if evt.BudgetSpent != nil && *evt.BudgetSpent > 0 {
+			budgetSpent = *evt.BudgetSpent
+		} else {
+			m.DB.Model(&models.GuestAllocation{}).Where("event_id = ?", evt.ID).Select("COALESCE(SUM(locked_price), 0)").Scan(&budgetSpent)
+		}
+
+		// If no budget is set but we have budgetSpent, use budgetSpent as totalBudget so bar fills to 100%
+		totalBudget := evt.Budget
+		if totalBudget == nil && budgetSpent > 0 {
+			totalBudget = &budgetSpent
+		}
+
+		responseEvents = append(responseEvents, EventResponse{
+			Event:                evt,
+			GuestCount:           guestCount,
+			InventoryConsumed:    float64(int(consumption)), // round to nearest int %
+			BudgetSpent:          budgetSpent,
+			TotalBudget:          totalBudget,
+			DaysUntilEvent:       daysUntil,
+			PendingActions:       pendingActions,
+			PendingActionDetails: pendingActionDetails,
+		})
+	}
+
 	// 2. Store in Redis
 	if store.RDB != nil {
-		if data, err := json.Marshal(events); err == nil {
+		if data, err := json.Marshal(responseEvents); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 1*time.Hour)
 			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
 		}
@@ -64,7 +158,7 @@ func (m *Repository) GetEvents(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 		"message": "Events Fetched Successfully",
-		"events":  events,
+		"events":  responseEvents,
 	})
 }
 
@@ -80,15 +174,28 @@ func (m *Repository) GetEvent(c *fiber.Ctx) error {
 	cacheKey := fmt.Sprintf("events:id:%s", id)
 	ctx := context.Background()
 
+	// Define response struct locally for the handler
+	type EventResponse struct {
+		models.Event
+		GuestCount           int64    `json:"guestCount"`
+		InventoryConsumed    float64  `json:"inventoryConsumed"`
+		BudgetSpent          float64  `json:"budgetSpent"`
+		TotalBudget          *float64 `json:"totalBudget"`
+		DaysUntilEvent       int      `json:"daysUntilEvent"`
+		PendingActions       int      `json:"pendingActions"`
+		PendingActionDetails []string `json:"pendingActionDetails"`
+	}
+	var resEvent EventResponse
+
 	// 1. Try to get from Redis
 	if store.RDB != nil {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
-			if err := json.Unmarshal([]byte(cachedData), &event); err == nil {
+			if err := json.Unmarshal([]byte(cachedData), &resEvent); err == nil {
 				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
 				return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 					"message": "Event Fetched (Cached)",
-					"event":   event,
+					"event":   resEvent,
 				})
 			}
 		} else {
@@ -100,9 +207,71 @@ func (m *Repository) GetEvent(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Event not found")
 	}
 
+	// Fetch Agent Name
+	var agent models.User
+	agentName := "Agent"
+	if err := m.DB.Where("id = ?", event.AgentID).First(&agent).Error; err == nil {
+		agentName = agent.Name
+	}
+	event.Organizer = agentName
+
+	var guestCount int64
+	m.DB.Model(&models.Guest{}).Where("event_id = ?", event.ID).Count(&guestCount)
+
+	var allocatedCount int64
+	m.DB.Model(&models.GuestAllocation{}).Where("event_id = ?", event.ID).Count(&allocatedCount)
+
+	var consumption float64 = 0.0
+	if len(event.RoomsInventory) > 0 {
+		var totalRooms int = 0
+		var rooms []RoomsInventoryItem
+		json.Unmarshal(event.RoomsInventory, &rooms)
+		for _, rp := range rooms {
+			totalRooms += rp.Available // Or rp.Total
+		}
+		if totalRooms > 0 {
+			consumption = (float64(allocatedCount) / float64(totalRooms)) * 100
+		}
+	}
+
+	// Calculate Days Until Event
+	daysUntil := int(time.Until(event.StartDate).Hours() / 24)
+
+	// Calculate Pending Actions (e.g. guests without allocations)
+	var pendingGuests int64
+	m.DB.Model(&models.Guest{}).
+		Joins("LEFT JOIN guest_allocations ON guests.id = guest_allocations.guest_id").
+		Where("guests.event_id = ? AND guest_allocations.id IS NULL", event.ID).
+		Count(&pendingGuests)
+
+	pendingActions := int(pendingGuests)
+	var pendingActionDetails []string
+	if pendingGuests > 0 {
+		pendingActionDetails = append(pendingActionDetails, fmt.Sprintf("%d guest(s) need room allocation", pendingGuests))
+	}
+	if event.HeadGuestID == uuid.Nil {
+		pendingActions++
+		pendingActionDetails = append(pendingActionDetails, "Assign a Head Guest")
+	}
+
+	// Calculate Budget Spent (Sum of LockedPrice in Allocations)
+	var budgetSpent float64
+	m.DB.Model(&models.GuestAllocation{}).Where("event_id = ?", event.ID).Select("COALESCE(SUM(locked_price), 0)").Scan(&budgetSpent)
+
+	resEvent = EventResponse{
+		Event:                event,
+		GuestCount:           guestCount,
+		InventoryConsumed:    float64(int(consumption)),
+		BudgetSpent:          budgetSpent,
+		TotalBudget:          event.Budget,
+		DaysUntilEvent:       daysUntil,
+		PendingActions:       pendingActions,
+		PendingActionDetails: pendingActionDetails,
+	}
+
 	// 2. Store in Redis
 	if store.RDB != nil {
-		if data, err := json.Marshal(event); err == nil {
+		if data, err := json.Marshal(resEvent); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 1*time.Hour)
 			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
 		}
@@ -110,7 +279,7 @@ func (m *Repository) GetEvent(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 		"message": "Event Fetched",
-		"event":   event,
+		"event":   resEvent,
 	})
 }
 
@@ -120,6 +289,7 @@ type CreateEventRequest struct {
 	Location       string               `json:"location"`
 	StartDate      string               `json:"startDate"`
 	EndDate        string               `json:"endDate"`
+	Budget         *float64             `json:"budget"`
 	RoomsInventory []RoomsInventoryItem `json:"roomsInventory"`
 }
 
@@ -143,6 +313,10 @@ func (m *Repository) CreateEvent(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing required fields")
 	}
 
+	if req.Budget == nil || *req.Budget <= 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Budget must be greater than 0")
+	}
+
 	// Try parsing dates. Frontend sends YYYY-MM-DD usually for date inputs.
 	layout := "2006-01-02"
 	startDate, err := time.Parse(layout, req.StartDate)
@@ -162,6 +336,18 @@ func (m *Repository) CreateEvent(c *fiber.Ctx) error {
 		}
 	}
 
+	// Logical Date Validation
+	now := time.Now().Truncate(24 * time.Hour)
+	eventStart := startDate.Truncate(24 * time.Hour)
+	eventEnd := endDate.Truncate(24 * time.Hour)
+
+	if eventStart.Before(now) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Start Date cannot be in the past")
+	}
+	if eventEnd.Before(eventStart) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "End Date must be after or equal to Start Date")
+	}
+
 	// JSONB handling for RoomsInventory
 	for i := range req.RoomsInventory {
 		req.RoomsInventory[i].Total = req.RoomsInventory[i].Available
@@ -176,6 +362,7 @@ func (m *Repository) CreateEvent(c *fiber.Ctx) error {
 		Location:       req.Location,
 		StartDate:      startDate,
 		EndDate:        endDate,
+		Budget:         req.Budget,
 		Status:         "active",
 		RoomsInventory: datatypes.JSON(roomsJSON),
 	}
@@ -223,13 +410,14 @@ func (m *Repository) GetEventVenues(c *fiber.Ctx) error {
 	})
 }
 
-// UpdateEventRequest struct
 type UpdateEventRequest struct {
 	Name           string               `json:"name"`
 	HotelID        string               `json:"hotelId"`
 	Location       string               `json:"location"`
 	StartDate      string               `json:"startDate"`
 	EndDate        string               `json:"endDate"`
+	Budget         *float64             `json:"budget"`
+	BudgetSpent    *float64             `json:"budgetSpent"`
 	RoomsInventory []RoomsInventoryItem `json:"roomsInventory"`
 }
 
@@ -268,6 +456,12 @@ func (m *Repository) UpdateEvent(c *fiber.Ctx) error {
 			updates["end_date"] = t
 		}
 	}
+	if req.Budget != nil {
+		updates["budget"] = *req.Budget
+	}
+	if req.BudgetSpent != nil {
+		updates["budget_spent"] = *req.BudgetSpent
+	}
 
 	if len(req.RoomsInventory) > 0 {
 		roomsJSON, _ := json.Marshal(req.RoomsInventory)
@@ -298,6 +492,12 @@ func (m *Repository) DeleteEvent(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid Event ID")
 	}
 
+	// Fetch event first to get AgentID for cache invalidation
+	var event models.Event
+	if err := m.DB.Where("id = ?", id).First(&event).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Event not found")
+	}
+
 	// Transactional delete using Cascade if configured, or manual
 	tx := m.DB.Begin()
 
@@ -324,11 +524,8 @@ func (m *Repository) DeleteEvent(c *fiber.Ctx) error {
 	// Invalidate cache
 	utils.Invalidate(context.Background(),
 		fmt.Sprintf("events:id:%s", id),
+		fmt.Sprintf("events:agent:%s", event.AgentID.String()),
 	)
-	// Note: Invalidating agent list might be hard without knowing agentID here,
-	// but we could just clear it or rely on TTL if we don't have it easily.
-	// Actually, the event we just deleted belongs to an agent.
-	// We'd need to fetch the event first to get the agentID.
 
 	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 		"message": "Event Deleted Successfully",
@@ -340,6 +537,7 @@ type AssignHeadGuestRequest struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
 	Phone string `json:"phone"`
+	Age   int    `json:"age"`
 }
 
 func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
@@ -445,13 +643,16 @@ func (m *Repository) AssignHeadGuest(c *fiber.Ctx) error {
 	// 3. Create Guest Record (optional, but requested in previous conversations)
 	// We ensure the Guest ID matches the User ID so portal lookups work
 	guest := models.Guest{
-		ID:       user.ID, // Link User ID to Guest ID
-		EventID:  event.ID,
-		Name:     req.Name,
-		Email:    req.Email,
-		Phone:    req.Phone,
-		Type:     "Adult",
-		FamilyID: uuid.New(),
+		ID:            user.ID, // Link User ID to Guest ID
+		EventID:       event.ID,
+		Name:          req.Name,
+		Email:         req.Email,
+		Phone:         req.Phone,
+		Age:           req.Age,
+		Type:          "Adult",
+		FamilyID:      uuid.New(),
+		ArrivalDate:   event.StartDate,
+		DepartureDate: event.EndDate,
 	}
 	if err := tx.Create(&guest).Error; err != nil {
 		tx.Rollback()
