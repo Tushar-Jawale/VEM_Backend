@@ -254,6 +254,7 @@ func main() {
 			BaseFare  float64
 			Amenities []string
 		}{
+			{"Single Room", 1, 1500.0, []string{"WiFi", "TV", "AC"}},
 			{"Standard Room", 2, 3000.0, []string{"WiFi", "TV", "AC"}},
 			{"Deluxe Room", 3, 5000.0, []string{"WiFi", "TV", "AC", "Balcony", "Mini Bar"}},
 			{"Executive Suite", 4, 8000.0, []string{"WiFi", "TV", "AC", "Bathtub", "Kitchenette"}},
