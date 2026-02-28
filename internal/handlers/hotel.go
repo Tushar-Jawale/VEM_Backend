@@ -11,6 +11,7 @@ import (
 	"github.com/akashtripathi12/TBO_Backend/internal/store"
 	"github.com/akashtripathi12/TBO_Backend/internal/utils"
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 )
 
 // GetHotelsByCity fetches the raw hotel list for a city with filters
@@ -32,7 +33,8 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 	ctx := context.Background()
 
 	// 2. Try to get from Redis
-	if store.RDB != nil {
+	skipCache := c.Query("skip_cache") == "true"
+	if store.RDB != nil && !skipCache {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &hotels); err == nil {
@@ -47,68 +49,133 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 	}
 
 	// 3. Build Query
-	query := store.DB.Model(&models.Hotel{}).Where("city_id = ?", cityID).
-		Preload("Rooms").Preload("Banquets").Preload("Menus")
+	query := store.DB.Debug().Model(&models.Hotel{}).Where("city_id = ?", cityID).
+		Preload("Banquets").Preload("Menus")
 
 	// --- Room Filters ---
-	joinRooms := false
+	// Consolidate all room-level constraints into a shared subquery builder
+	// to ensure strict AND logic (Hotel must have rooms that satisfy EVERY filter)
 
-	// 1. Free Cancellation
-	if c.Query("free_cancellation") == "true" {
-		joinRooms = true
-		query = query.Where("room_offers.is_refundable = ?", true)
+	minPrice := utils.ParseFloat64(c.Query("min_price"), 0)
+	maxPrice := utils.ParseFloat64(c.Query("max_price"), 0)
+	log.Printf("DEBUG: minPrice=%f, maxPrice=%f", minPrice, maxPrice)
+	freeCancellation := c.Query("free_cancellation") == "true"
+
+	guestsPerRoom := c.Query("guests_per_room")
+	if guestsPerRoom == "" {
+		guestsPerRoom = c.Query("occupancy")
 	}
+	gValue := utils.ParseInt(guestsPerRoom, 0)
 
-	// 2. Room Configuration (Complex Filter)
-	// ?room_config=[{"occupancy":2,"count":30},{"occupancy":3,"count":10}]
-	if roomConfig := c.Query("room_config"); roomConfig != "" {
-		type Req struct {
-			Occupancy int `json:"occupancy"`
-			Count     int `json:"count"`
-		}
-		var reqs []Req
-		if err := json.Unmarshal([]byte(roomConfig), &reqs); err == nil {
-			for _, r := range reqs {
-				// Use a correlated subquery for each requirement
-				// "Find hotels where EXISTS a room with cap>=X and count>=Y"
-				subQuery := fmt.Sprintf("EXISTS (SELECT 1 FROM room_offers ro WHERE ro.hotel_id = hotels.hotel_code AND ro.max_capacity >= %d AND ro.count >= %d)", r.Occupancy, r.Count)
-				query = query.Where(subQuery)
+	roomAmenities := c.Query("room_amenities")
+	amenitiesList := utils.ParseCSV(roomAmenities)
+
+	// Build the base EXISTS subquery fragment
+	// exactCap=true → use max_capacity = ? (strict room-type match)
+	// exactCap=false → use max_capacity >= ? (general occupancy / "fits at least N people")
+	buildRoomSubQuery := func(alias string, minCap int, minCount int, exactCap bool) (string, []interface{}) {
+		sql := fmt.Sprintf("SELECT 1 FROM room_offers %s WHERE %s.hotel_id = hotels.hotel_code", alias, alias)
+		var args []interface{}
+
+		if minCap > 0 {
+			if exactCap {
+				sql += fmt.Sprintf(" AND %s.max_capacity = ?", alias)
+			} else {
+				sql += fmt.Sprintf(" AND %s.max_capacity >= ?", alias)
 			}
+			args = append(args, minCap)
 		}
-	}
-
-	// 3. Basic Price/Guests Filters
-	if minPrice := c.Query("min_price"); minPrice != "" {
-		joinRooms = true
-		query = query.Where("room_offers.total_fare >= ?", minPrice)
-	}
-	if maxPrice := c.Query("max_price"); maxPrice != "" {
-		joinRooms = true
-		query = query.Where("room_offers.total_fare <= ?", maxPrice)
-	}
-	if guestsPerRoom := c.Query("guests_per_room"); guestsPerRoom != "" {
-		joinRooms = true
-		query = query.Where("room_offers.max_capacity >= ?", guestsPerRoom)
-	}
-	if roomCount := c.Query("room_count"); roomCount != "" {
-		joinRooms = true
-		query = query.Where("room_offers.count >= ?", roomCount)
-	}
-	// Amenity Filter (JSONB array contains)
-	// ?room_amenities=Bathtub,Balcony (comma separated)
-	if roomAmenities := c.Query("room_amenities"); roomAmenities != "" {
-		joinRooms = true
-		amenitiesList := utils.ParseCSV(roomAmenities)
+		if minCount > 0 {
+			sql += fmt.Sprintf(" AND %s.count >= ?", alias)
+			args = append(args, minCount)
+		}
+		if minPrice > 0 {
+			sql += fmt.Sprintf(" AND %s.total_fare >= ?", alias)
+			args = append(args, minPrice)
+		}
+		if maxPrice > 0 {
+			sql += fmt.Sprintf(" AND %s.total_fare <= ?", alias)
+			args = append(args, maxPrice)
+		}
+		if freeCancellation {
+			sql += fmt.Sprintf(" AND %s.is_refundable = ?", alias)
+			args = append(args, true)
+		}
 		for _, amenity := range amenitiesList {
-			// Postgres JSONB containment: '["Bathtub", "Balcony"]' @> '["Bathtub"]'
-			// GORM JSON query
-			query = query.Where("room_offers.amenities @> ?", fmt.Sprintf("[\"%s\"]", amenity))
+			sql += fmt.Sprintf(" AND %s.amenities @> ?", alias)
+			args = append(args, fmt.Sprintf("[\"%s\"]", amenity))
+		}
+		return sql, args
+	}
+
+	// 1. Room Configuration (Complex Inventory Filter)
+	type Req struct {
+		Occupancy int `json:"occupancy"`
+		Count     int `json:"count"`
+	}
+	var reqs []Req
+	if roomConfig := c.Query("room_config"); roomConfig != "" {
+		if err := json.Unmarshal([]byte(roomConfig), &reqs); err != nil {
+			log.Printf("⚠️  Failed to unmarshal room_config: %v", err)
 		}
 	}
 
-	if joinRooms {
-		query = query.Joins("JOIN room_offers ON room_offers.hotel_id = hotels.hotel_code").Distinct()
+	// Specific room type requirements — use EXACT capacity matching
+	if s := c.QueryInt("rooms_single", 0); s > 0 {
+		reqs = append(reqs, Req{Occupancy: 1, Count: s})
 	}
+	if d := c.QueryInt("rooms_double", 0); d > 0 {
+		reqs = append(reqs, Req{Occupancy: 2, Count: d})
+	}
+	if t := c.QueryInt("rooms_triple", 0); t > 0 {
+		reqs = append(reqs, Req{Occupancy: 3, Count: t})
+	}
+	if q := c.QueryInt("rooms_quad", 0); q > 0 {
+		reqs = append(reqs, Req{Occupancy: 4, Count: q})
+	}
+
+	if len(reqs) > 0 {
+		for i, r := range reqs {
+			// Use exact capacity matching for named room types
+			sql, args := buildRoomSubQuery(fmt.Sprintf("ro%d", i), r.Occupancy, r.Count, true)
+			log.Printf("DEBUG: SubQuery %d: SQL=%s, Args=%v", i, sql, args)
+			query = query.Where(fmt.Sprintf("EXISTS (%s)", sql), args...)
+		}
+	} else if gValue > 0 || minPrice > 0 || maxPrice > 0 || freeCancellation || len(amenitiesList) > 0 {
+		// General occupancy filter: use >= (any room that fits at least N people)
+		sql, args := buildRoomSubQuery("ro_base", gValue, 0, false)
+		query = query.Where(fmt.Sprintf("EXISTS (%s)", sql), args...)
+	}
+
+	// Filter preloaded rooms so the user sees exactly what they searched for
+	query = query.Preload("Rooms", func(db *gorm.DB) *gorm.DB {
+		preloadQuery := db
+		if len(reqs) > 0 {
+			// Only preload rooms whose capacity exactly matches one of the requested types
+			var caps []int
+			for _, r := range reqs {
+				caps = append(caps, r.Occupancy)
+			}
+			log.Printf("DEBUG: Preload exact caps=%v", caps)
+			preloadQuery = preloadQuery.Where("max_capacity IN ?", caps)
+		} else if gValue > 0 {
+			// General occupancy: any room that can fit at least N people
+			preloadQuery = preloadQuery.Where("max_capacity >= ?", gValue)
+		}
+		if minPrice > 0 {
+			preloadQuery = preloadQuery.Where("total_fare >= ?", minPrice)
+		}
+		if maxPrice > 0 {
+			preloadQuery = preloadQuery.Where("total_fare <= ?", maxPrice)
+		}
+		if freeCancellation {
+			preloadQuery = preloadQuery.Where("is_refundable = ?", true)
+		}
+		for _, amenity := range amenitiesList {
+			preloadQuery = preloadQuery.Where("amenities @> ?", fmt.Sprintf("[\"%s\"]", amenity))
+		}
+		return preloadQuery
+	})
 
 	// --- Hotel Filters ---
 	if stars := c.Query("stars"); stars != "" {
