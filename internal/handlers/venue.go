@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"strconv"
 	"time"
 
@@ -27,11 +26,11 @@ func (r *Repository) GetBanquetsByHotel(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &banquets); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return c.JSON(banquets)
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	}
 
@@ -52,7 +51,7 @@ func (r *Repository) GetBanquetsByHotel(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(banquets); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 15*24*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
+
 		}
 	}
 
@@ -71,11 +70,11 @@ func (r *Repository) GetCateringByHotel(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &menus); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return c.JSON(menus)
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	}
 
@@ -87,7 +86,7 @@ func (r *Repository) GetCateringByHotel(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(menus); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 15*24*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
+
 		}
 	}
 

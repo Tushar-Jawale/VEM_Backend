@@ -38,7 +38,7 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &hotels); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return c.Status(fiber.StatusOK).JSON(fiber.Map{
 					"status": "success",
 					"count":  len(hotels),
@@ -49,7 +49,7 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 	}
 
 	// 3. Build Query
-	query := store.DB.Debug().Model(&models.Hotel{}).Where("city_id = ?", cityID).
+	query := store.DB.Model(&models.Hotel{}).Where("city_id = ?", cityID).
 		Preload("Banquets").Preload("Menus")
 
 	// --- Room Filters ---
@@ -58,7 +58,7 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 
 	minPrice := utils.ParseFloat64(c.Query("min_price"), 0)
 	maxPrice := utils.ParseFloat64(c.Query("max_price"), 0)
-	log.Printf("DEBUG: minPrice=%f, maxPrice=%f", minPrice, maxPrice)
+
 	freeCancellation := c.Query("free_cancellation") == "true"
 
 	guestsPerRoom := c.Query("guests_per_room")
@@ -138,7 +138,7 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 		for i, r := range reqs {
 			// Use exact capacity matching for named room types
 			sql, args := buildRoomSubQuery(fmt.Sprintf("ro%d", i), r.Occupancy, r.Count, true)
-			log.Printf("DEBUG: SubQuery %d: SQL=%s, Args=%v", i, sql, args)
+
 			query = query.Where(fmt.Sprintf("EXISTS (%s)", sql), args...)
 		}
 	} else if gValue > 0 || minPrice > 0 || maxPrice > 0 || freeCancellation || len(amenitiesList) > 0 {
@@ -156,7 +156,7 @@ func (r *Repository) GetHotelsByCity(c *fiber.Ctx) error {
 			for _, r := range reqs {
 				caps = append(caps, r.Occupancy)
 			}
-			log.Printf("DEBUG: Preload exact caps=%v", caps)
+
 			preloadQuery = preloadQuery.Where("max_capacity IN ?", caps)
 		} else if gValue > 0 {
 			// General occupancy: any room that can fit at least N people
@@ -295,7 +295,7 @@ func (r *Repository) GetHotel(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &hotel); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return c.Status(fiber.StatusOK).JSON(fiber.Map{
 					"status": "success",
 					"data":   hotel,

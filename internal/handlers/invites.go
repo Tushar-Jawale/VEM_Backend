@@ -93,13 +93,12 @@ func (m *Repository) SendInvites(c *fiber.Ctx) error {
 		}
 
 		// Enqueue Task
-		info, err := m.QueueClient.Enqueue(task)
+		_, err = m.QueueClient.Enqueue(task)
 		if err != nil {
 			log.Printf("❌ Failed to enqueue email task: %v", err)
 			continue
 		}
 
-		log.Printf("✅ Enqueued task: id=%s queue=%s", info.ID, info.Queue)
 		queuedCount++
 	}
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 
 	"github.com/akashtripathi12/TBO_Backend/internal/models"
 	"github.com/akashtripathi12/TBO_Backend/internal/utils"
@@ -60,11 +59,10 @@ func (r *Repository) GetAllNegotiations(c *fiber.Ctx) error {
 // GetNegotiationByToken resolves a share_token to a full session with all rounds
 func (r *Repository) GetNegotiationByToken(c *fiber.Ctx) error {
 	token := c.Params("token")
-	log.Printf("🔍 GetNegotiationByToken called with token: %s", token)
 
 	parsedToken, err := uuid.Parse(token)
 	if err != nil {
-		log.Printf("❌ Invalid token format: %v", err)
+
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid token format")
 	}
 
@@ -76,11 +74,9 @@ func (r *Repository) GetNegotiationByToken(c *fiber.Ctx) error {
 		}).
 		Where("share_token = ?", parsedToken).
 		First(&session).Error; err != nil {
-		log.Printf("❌ Session not found for token %s: %v", token, err)
+
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Negotiation session not found")
 	}
-
-	log.Printf("✅ Session found: ID=%s, Status=%s, EventID=%s", session.ID, session.Status, session.EventID)
 
 	return c.JSON(fiber.Map{
 		"session": session,
@@ -265,7 +261,6 @@ func (r *Repository) SubmitCounterOffer(c *fiber.Ctx) error {
 
 	// Determine who is modifying based on authenticated user's role
 	userRole, _ := c.Locals("role").(string)
-	log.Printf("🔍 SubmitCounterOffer: userRole=%s", userRole)
 
 	modifier := models.NegotiationModifierTboAgent // default
 	var nextStatus string

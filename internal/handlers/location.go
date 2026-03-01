@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
 	"github.com/akashtripathi12/TBO_Backend/internal/models"
@@ -24,14 +23,14 @@ func (r *Repository) GetCountries(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &countries); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return utils.SuccessResponse(c, fiber.StatusOK, countries)
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	} else {
-		log.Println("⚠️ [REDIS] SKIPPED: Client not initialized")
+
 	}
 
 	// 2. If not in Redis (or Redis disabled), fetch from DB
@@ -45,7 +44,7 @@ func (r *Repository) GetCountries(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(countries); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 15*24*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s (TTL: 15 days)\n", cacheKey)
+
 		}
 	}
 
@@ -73,11 +72,11 @@ func (r *Repository) GetCities(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &cities); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return utils.SuccessResponse(c, fiber.StatusOK, cities)
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	}
 
@@ -94,7 +93,7 @@ func (r *Repository) GetCities(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(cities); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 15*24*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s (TTL: 15 days)\n", cacheKey)
+
 		}
 	}
 

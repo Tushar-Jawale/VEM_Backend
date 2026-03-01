@@ -51,21 +51,18 @@ func GetEventAllocationsHandler(db *gorm.DB) fiber.Handler {
 		// support both :eventId (new) and :id (legacy/standard)
 		eventID := c.Params("id")
 
-		log.Printf("🔍 GetEventAllocations: Requested Event ID: %s", eventID)
-
 		eventUUID, err := uuid.Parse(eventID)
 		if err != nil {
-			log.Printf("❌ Invalid UUID format: %s", eventID)
+
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid event ID"})
 		}
 
 		// 1. Fetch Event for Status and Inventory
 		var event models.Event
 		if err := db.First(&event, "id = ?", eventUUID).Error; err != nil {
-			log.Printf("❌ Event not found in DB: %s (Error: %v)", eventUUID, err)
+
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Event not found"})
 		}
-		log.Printf("✅ Event found: %s (Status: %s)", event.ID, event.Status)
 
 		// 2. Parse Inventory
 		var inventory []RoomsInventoryItem
@@ -390,8 +387,6 @@ func AllocateFamilyHandler(db *gorm.DB) fiber.Handler {
 			})
 		}
 
-		log.Printf("✅ Family %s allocated to room %s (Event: %s)", familyID, req.RoomOfferID, eventID)
-
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"message":         "Family allocated successfully",
 			"family_id":       familyID,
@@ -483,8 +478,6 @@ func FinalizeRoomsHandler(db *gorm.DB) fiber.Handler {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Commit failed"})
 		}
 
-		log.Printf("✅ Event %s rooms status updated to %s", eventID, targetStatus)
-
 		return c.JSON(fiber.Map{
 			"message":  "Room mapping locked successfully",
 			"status":   targetStatus,
@@ -565,8 +558,6 @@ func ReopenAllocationHandler(db *gorm.DB) fiber.Handler {
 		if err := tx.Commit().Error; err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Commit failed"})
 		}
-
-		log.Printf("✅ Event %s re-opened (active)", eventID)
 
 		return c.JSON(fiber.Map{
 			"message":  "Event reopened successfully",
@@ -692,8 +683,6 @@ func CheckInFamilyHandler(db *gorm.DB) fiber.Handler {
 				"error": "No allocations found for this family",
 			})
 		}
-
-		log.Printf("✅ Family %s checked in (Event: %s)", familyID, eventID)
 
 		return c.JSON(fiber.Map{
 			"message":         "Family checked in successfully",
@@ -966,8 +955,6 @@ func UpdateAllocationHandler(db *gorm.DB) fiber.Handler {
 				"error": "Transaction commit failed",
 			})
 		}
-
-		log.Printf("✅ Family %s moved to room %s (Event: %s)", familyID, req.RoomOfferID, eventID)
 
 		return c.JSON(fiber.Map{
 			"message":           "Allocation updated successfully",

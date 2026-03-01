@@ -53,14 +53,14 @@ func (m *Repository) GetEvents(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &responseEvents); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 					"message": "Events Fetched Successfully (Cached)",
 					"events":  responseEvents,
 				})
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	}
 
@@ -154,7 +154,7 @@ func (m *Repository) GetEvents(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(responseEvents); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 1*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
+
 		}
 	}
 
@@ -194,14 +194,14 @@ func (m *Repository) GetEvent(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &resEvent); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 					"message": "Event Fetched (Cached)",
 					"event":   resEvent,
 				})
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	}
 
@@ -277,7 +277,7 @@ func (m *Repository) GetEvent(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(resEvent); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 1*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
+
 		}
 	}
 
@@ -671,7 +671,7 @@ func (m *Repository) AssignEventManager(c *fiber.Ctx) error {
 	if err := tx.Where("email = ?", req.Email).First(&user).Error; err != nil {
 		// If user does not exist, create a new one
 		if err == gorm.ErrRecordNotFound {
-			log.Printf("👤 Creating new event manager user: %s", req.Email)
+
 			// Create new user
 			tempPassword = utils.GenerateTempPassword()
 			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(tempPassword), bcrypt.DefaultCost)
@@ -698,7 +698,7 @@ func (m *Repository) AssignEventManager(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to query user: "+err.Error())
 		}
 	} else {
-		log.Printf("👤 User already exists: %s", req.Email)
+
 		// If user exists, update their details if necessary and ensure role is event_manager
 		if user.Role != "event_manager" {
 			user.Role = "event_manager"
@@ -780,21 +780,11 @@ func (m *Repository) AssignEventManager(c *fiber.Ctx) error {
 		`, event.Name, user.Email, tempPassword)
 
 		task, err := queue.NewEmailTask(user.Email, subject, body)
-		if err == nil {
-			if m.QueueClient != nil {
-				if _, err := m.QueueClient.Enqueue(task); err != nil {
-					log.Printf("❌ Failed to enqueue task: %v", err)
-				} else {
-					log.Printf("📧 Queued credential email for %s", user.Email)
-				}
-			} else {
-				log.Println("❌ QueueClient is nil!")
-			}
-		} else {
+		if err == nil && m.QueueClient != nil {
+			m.QueueClient.Enqueue(task)
+		} else if err != nil {
 			log.Printf("❌ Failed to create email task: %v", err)
 		}
-	} else {
-		log.Printf("ℹ️ Skipping email for existing user %s (no temp password generated)", user.Email)
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{

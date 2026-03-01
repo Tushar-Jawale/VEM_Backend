@@ -89,9 +89,7 @@ func (m *Repository) AddToCart(c *fiber.Ctx) error {
 	switch req.Type {
 	case "room":
 		var room models.RoomOffer
-		log.Printf("🔍 [CART] Searching for RoomOffer ID: %s\n", req.RefID)
 		if err := m.DB.Where("id = ?", req.RefID).First(&room).Error; err != nil {
-			log.Printf("❌ [CART] RoomOffer NOT FOUND: %s (Error: %v)\n", req.RefID, err)
 			return utils.ErrorResponse(c, fiber.StatusNotFound, "Room offer not found")
 		}
 		parentHotelID = &room.HotelID
@@ -115,9 +113,7 @@ func (m *Repository) AddToCart(c *fiber.Ctx) error {
 
 	case "hotel":
 		var hotel models.Hotel
-		log.Printf("🔍 [CART] Searching for Hotel Code: %s\n", req.RefID)
 		if err := m.DB.Where("hotel_code = ?", req.RefID).First(&hotel).Error; err != nil {
-			log.Printf("❌ [CART] Hotel NOT FOUND: %s (Error: %v)\n", req.RefID, err)
 			return utils.ErrorResponse(c, fiber.StatusNotFound, "Hotel not found")
 		}
 		parentHotelID = &hotel.ID
@@ -418,14 +414,14 @@ func (r *Repository) GetEventCart(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 					"message": "Cart fetched successfully (Cached)",
 					"cart":    response,
 				})
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	}
 
@@ -450,7 +446,7 @@ func (r *Repository) GetEventCart(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(response); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 1*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
+
 		}
 	}
 

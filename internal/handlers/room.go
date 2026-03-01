@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
 	"github.com/akashtripathi12/TBO_Backend/internal/models"
@@ -34,7 +33,7 @@ func (r *Repository) GetRoomsByHotel(c *fiber.Ctx) error {
 		cachedData, err := store.RDB.Get(ctx, cacheKey).Result()
 		if err == nil {
 			if err := json.Unmarshal([]byte(cachedData), &rooms); err == nil {
-				log.Printf("⚡ [REDIS] CACHE HIT: %s\n", cacheKey)
+
 				return c.Status(fiber.StatusOK).JSON(fiber.Map{
 					"status": "success",
 					"count":  len(rooms),
@@ -42,7 +41,7 @@ func (r *Repository) GetRoomsByHotel(c *fiber.Ctx) error {
 				})
 			}
 		} else {
-			log.Printf("🔍 [REDIS] CACHE MISS: %s (Reason: %v)\n", cacheKey, err)
+
 		}
 	}
 
@@ -57,7 +56,7 @@ func (r *Repository) GetRoomsByHotel(c *fiber.Ctx) error {
 	if store.RDB != nil {
 		if data, err := json.Marshal(rooms); err == nil {
 			store.RDB.Set(ctx, cacheKey, data, 15*24*time.Hour)
-			log.Printf("💾 [REDIS] CACHE SET: %s\n", cacheKey)
+
 		}
 	}
 

@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"fmt"
-	"log"
 	"time"
 
 	"github.com/akashtripathi12/TBO_Backend/internal/models"
@@ -20,48 +18,6 @@ func (m *Repository) GetGuests(c *fiber.Ctx) error {
 		return utils.InternalErrorResponse(c, "Failed to fetch guests")
 	}
 
-	// DEBUG LOG
-	// For local dev, using fmt.Printf to see output in terminal
-	// In production, use structured logging
-	// import "fmt" if needed, but "log" is available
-	// Let's use log.Printf
-	// Ensure "log" is imported
-	// log.Printf("DEBUG GetGuests: EventID=%s, Count=%d", eventID, len(guests))
-	// for i, g := range guests {
-	//    if i < 3 { log.Printf("Guest[%d]: ID=%s, Family=%s", i, g.ID, g.FamilyID) }
-	// }
-
-	// Actually implementing log.Printf requires import.
-	// The previous view_file of guests.go showed imports: time, models, utils, fiber, uuid.
-	// Need to add "log".
-	// I will replace import block and function body in one go if possible, or just add "log" if I can.
-	// replace_file_content is better for blocks.
-
-	// I will skip adding "log" import for now and use fmt if available, or just rely on existing imports.
-	// Wait, guests.go doesn't import "log" or "fmt".
-	// I need to add import.
-
-	// Let's defer backend logging change until I verify imports.
-
-	// The previous view_file output for guests.go line 1-10:
-	// package handlers
-	// import ( "time", ... )
-
-	// No "log".
-
-	// I will invoke replace_file_content generously to include imports.
-
-	// DEBUG LOG
-	log.Printf("DEBUG GetGuests: EventID=%s, Count=%d", eventID, len(guests))
-	for i, g := range guests {
-		if i < 5 { // limit log
-			fmt.Printf("Guest[%d]: ID=%s, Family=%s, Event=%s\n", i, g.ID, g.FamilyID, g.EventID)
-		}
-	}
-
-	// Backend Fix: Return raw JSON to match frontend expectation
-	// Frontend expects: { "guests": [...] }
-	// generic-utils.SuccessResponse returns { "data": { "guests": [...] } }
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"guests": guests,
 	})
@@ -97,20 +53,16 @@ func (m *Repository) CreateGuest(c *fiber.Ctx) error {
 		FamilyMembers []GuestInput `json:"family_members"`
 	}
 
-	// DEBUG: Print raw body
-	rawBody := c.Body()
-	// fmt.Println("DEBUG RAW BODY:", string(rawBody))
-
 	// 1. Try generic map parsing to check JSON syntax
 	var genericMap map[string]interface{}
 	if err := c.BodyParser(&genericMap); err != nil {
-		return utils.ValidationErrorResponse(c, "DEBUG: JSON Syntax Error: "+err.Error()+" | Body: "+string(rawBody))
+		return utils.ValidationErrorResponse(c, "Invalid JSON format")
 	}
 
 	var req GuestInput
 	if err := c.BodyParser(&req); err != nil {
 		// Include err.Error() to help debug validity issues
-		return utils.ValidationErrorResponse(c, "DEBUG: Struct Mapping Error: "+err.Error())
+		return utils.ValidationErrorResponse(c, "Invalid input data")
 	}
 
 	// Basic Validation
@@ -132,7 +84,6 @@ func (m *Repository) CreateGuest(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Event is finalized and locked")
 	}
 
-	// 🔥 Generate ONE FamilyID for this registration
 	familyID := uuid.New()
 
 	// Helper to convert Input -> Model
@@ -143,7 +94,7 @@ func (m *Repository) CreateGuest(c *fiber.Ctx) error {
 			FamilyID:      familyID,
 			Name:          input.Name,
 			Age:           input.Age,
-			Type:          input.Type, // Will be auto-filled if empty below
+			Type:          input.Type,
 			Phone:         input.Phone,
 			Email:         input.Email,
 			ArrivalDate:   input.ArrivalDate,

@@ -53,16 +53,14 @@ func SendEmail(cfg *config.Config, to []string, subject string, body string) err
 		Timeout: 30 * time.Second, // Google Scripts can be slow
 	}
 
-	log.Printf("📡 [DEBUG] Sending Google Script bridge request (Target: %s)", targetEmail)
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("❌ [DEBUG] Google Script Call Failed: %v", err)
+
 		return fmt.Errorf("failed to call Google Script: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("📡 [DEBUG] Google Script Response Status: %d | Body: %s", resp.StatusCode, string(respBody))
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
 		return fmt.Errorf("Google Script error (Status %d): %s", resp.StatusCode, string(respBody))
