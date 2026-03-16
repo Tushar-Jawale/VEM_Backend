@@ -26,8 +26,10 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"math"
+	"math/rand"
 	"sort"
 	"time"
 
@@ -69,8 +71,9 @@ type VirtualRoom struct {
 	RoomName     string
 	MaxCapacity  int
 	Available    int
-	Total        int
-	PricePerRoom float64 // effective price (negotiation-aware)
+	Total             int
+	PricePerRoom      float64 // effective price (negotiation-aware)
+	IsVirtualResidual bool
 }
 
 // OptimisationContext is the full context loaded from DB for Phase 1.
@@ -94,8 +97,9 @@ type SuggestionItem struct {
 	Capacity        int     `json:"capacity"`
 	AllocationScore float64 `json:"allocationScore"`
 	CapacityWaste   int     `json:"capacityWaste"`
-	RoomPrice       float64 `json:"roomPrice"`
-	ConfidenceScore float64 `json:"confidenceScore"` // packing tightness [0,1]
+	RoomPrice         float64 `json:"roomPrice"`
+	ConfidenceScore   float64 `json:"confidenceScore"` // packing tightness [0,1]
+	IsVirtualResidual bool    `json:"isVirtualResidual"`
 }
 
 // SimResult is produced by baseline or optimised simulation.
@@ -106,6 +110,8 @@ type SimResult struct {
 	RoomsUsed           int
 	FamiliesSkipped     int
 	UnplaceableFamilies []string
+	VarianceFill        float64
+	GlobalScore         float64
 }
 
 // PlanValidity communicates the freshness window to the frontend (Phase 3).
@@ -136,6 +142,12 @@ type AIMetrics struct {
 	RoomsUsedBefore               int     `json:"roomsUsedBefore"`
 	RoomsUsedAfter                int     `json:"roomsUsedAfter"`
 	UtilisationImprovementPercent float64 `json:"utilisationImprovementPercent"`
+	NumberOfTrialsExecuted        int     `json:"numberOfTrialsExecuted"`
+	BestTrialScore                float64 `json:"bestTrialScore"`
+	VarianceBefore                float64 `json:"varianceBefore"`
+	VarianceAfter                 float64 `json:"varianceAfter"`
+	ResidualSlotsGenerated        int     `json:"residualSlotsGenerated"`
+	StagnationFlag                bool    `json:"stagnationFlag"`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,30 +195,79 @@ func GetOptimisationContext(db *gorm.DB, eventUUID uuid.UUID) (*OptimisationCont
 		return resolveRoomEffectivePrice(db, eventUUID, roomOfferID, fallback)
 	}
 
-	// 1f. Build virtual room slices (base + optimised are independent deep copies)
-	baseInventory := make([]VirtualRoom, len(inventoryItems))
-	optInventory := make([]VirtualRoom, len(inventoryItems))
-	for i, item := range inventoryItems {
-		price := effectivePrice(item.RoomOfferID, float64(item.PricePerRoom))
-		baseInventory[i] = VirtualRoom{
-			RoomOfferID:  item.RoomOfferID,
-			RoomName:     item.RoomName,
-			MaxCapacity:  item.MaxCapacity,
-			Available:    item.Available,
-			Total:        item.Total,
-			PricePerRoom: price,
-		}
-		optInventory[i] = baseInventory[i]
-	}
-
-	// 1g. Fetch existing allocations to identify unallocated guests
+	// 1f. Fetch existing allocations to identify unallocated guests and consumed capacity
 	var allAllocations []models.GuestAllocation
 	if err := db.Where("event_id = ?", eventUUID).Find(&allAllocations).Error; err != nil {
 		return nil, fmt.Errorf("failed to fetch allocations: %w", err)
 	}
 	allocatedGuestIDs := make(map[uuid.UUID]bool, len(allAllocations))
+	allocatedGuestsPerRoom := make(map[string]int)
 	for _, a := range allAllocations {
 		allocatedGuestIDs[a.GuestID] = true
+		if a.RoomOfferID != nil {
+			allocatedGuestsPerRoom[*a.RoomOfferID]++
+		}
+	}
+
+	// 1g. Build virtual room slices (base + optimised are independent deep copies)
+	var baseInventory []VirtualRoom
+	var optInventory []VirtualRoom
+	for _, item := range inventoryItems {
+		price := effectivePrice(item.RoomOfferID, float64(item.PricePerRoom))
+		
+		vr := VirtualRoom{
+			RoomOfferID:       item.RoomOfferID,
+			RoomName:          item.RoomName,
+			MaxCapacity:       item.MaxCapacity,
+			Available:         item.Available,
+			Total:             item.Total,
+			PricePerRoom:      price,
+			IsVirtualResidual: false,
+		}
+		baseInventory = append(baseInventory, vr)
+		optInventory = append(optInventory, vr)
+
+		// Residual Modelling
+		roomsUsed := item.Total - item.Available
+		if roomsUsed > 0 {
+			lockedCapacity := roomsUsed * item.MaxCapacity
+			alreadyAllocatedGuests := allocatedGuestsPerRoom[item.RoomOfferID]
+			residualCapacity := lockedCapacity - alreadyAllocatedGuests
+
+			if residualCapacity > 0 {
+				virtualItems := residualCapacity / item.MaxCapacity
+				remainder := residualCapacity % item.MaxCapacity
+
+				if virtualItems > 0 {
+					vrResidual := VirtualRoom{
+						RoomOfferID:       item.RoomOfferID,
+						RoomName:          item.RoomName + " (Residual)",
+						MaxCapacity:       item.MaxCapacity,
+						Available:         virtualItems,
+						Total:             virtualItems,
+						PricePerRoom:      price,
+						IsVirtualResidual: true,
+					}
+					baseInventory = append(baseInventory, vrResidual)
+					optInventory = append(optInventory, vrResidual)
+				}
+				
+				if remainder > 0 {
+					proportionalPrice := price * float64(remainder) / float64(item.MaxCapacity)
+					vrRemainder := VirtualRoom{
+						RoomOfferID:       item.RoomOfferID,
+						RoomName:          item.RoomName + " (Residual)",
+						MaxCapacity:       remainder,
+						Available:         1,
+						Total:             1,
+						PricePerRoom:      proportionalPrice,
+						IsVirtualResidual: true,
+					}
+					baseInventory = append(baseInventory, vrRemainder)
+					optInventory = append(optInventory, vrRemainder)
+				}
+			}
+		}
 	}
 
 	// 1h. Fetch all guests, filter unallocated, group by family
@@ -393,6 +454,8 @@ func SimulateBaselineAllocation(ctx *OptimisationContext) SimResult {
 		}
 	}
 
+	computeGlobalScore(&result, inv)
+
 	log.Printf("📊 Baseline simulation: waste=%d  cost=%.2f  roomsUsed=%d  familiesSkipped=%d",
 		result.TotalWaste, result.TotalCost, result.RoomsUsed, result.FamiliesSkipped)
 
@@ -407,91 +470,163 @@ func SimulateBaselineAllocation(ctx *OptimisationContext) SimResult {
 //   - Family sort: size DESC → stayDuration DESC → arrivalDate ASC
 //   - Room sort: capacity ASC → price ASC
 //   - Scoring: quadratic waste penalty (see computeScore)
-//   - All ordering is deterministic via sort.SliceStable
-func RunHeuristicOptimisation(ctx *OptimisationContext) SimResult {
-	inv := deepCopyInventory(ctx.OptInventory)
+//   - All ordering is deterministic via sort.SliceStable + pseudo-random seeded from event+time
+func RunHeuristicOptimisation(ctx *OptimisationContext, runStart time.Time) SimResult {
+	// deterministic seed based on hour
+	timeBucket := runStart.Truncate(time.Hour).Unix()
+	h := fnv.New64a()
+	h.Write([]byte(ctx.EventID.String()))
+	h.Write([]byte(fmt.Sprintf("%d", timeBucket)))
+	seed := int64(h.Sum64())
+	rnd := rand.New(rand.NewSource(seed))
 
-	fams := make([]FamilyGroup, len(ctx.UnallocatedFams))
-	copy(fams, ctx.UnallocatedFams)
+	numTrials := 10
+	var bestResult SimResult
+	bestScore := math.MaxFloat64
 
-	sort.SliceStable(fams, func(i, j int) bool {
-		fi, fj := fams[i], fams[j]
-		if fi.Size != fj.Size {
-			return fi.Size > fj.Size // largest families first
+	for t := 0; t < numTrials; t++ {
+		inv := deepCopyInventory(ctx.OptInventory)
+
+		fams := make([]FamilyGroup, len(ctx.UnallocatedFams))
+		copy(fams, ctx.UnallocatedFams)
+
+		famShuffle := make(map[string]int)
+		for _, f := range fams {
+			famShuffle[f.FamilyID] = rnd.Int()
 		}
-		if fi.StayDuration != fj.StayDuration {
-			return fi.StayDuration > fj.StayDuration // longer stays first
-		}
-		aiZero := fi.ArrivalDate.IsZero()
-		ajZero := fj.ArrivalDate.IsZero()
-		if aiZero && ajZero {
-			return fi.FamilyID < fj.FamilyID // stable tie-break
-		}
-		if aiZero {
-			return false // push missing-arrival to end
-		}
-		if ajZero {
-			return true
-		}
-		return fi.ArrivalDate.Before(fj.ArrivalDate) // earliest arrival first
-	})
 
-	// Rooms: smallest capacity first, cheapest price first within same capacity
-	sort.SliceStable(inv, func(i, j int) bool {
-		if inv[i].MaxCapacity != inv[j].MaxCapacity {
-			return inv[i].MaxCapacity < inv[j].MaxCapacity
+		roomShuffle := make(map[string]int)
+		for i, r := range inv {
+			roomShuffle[fmt.Sprintf("%s_%s_%d", r.RoomOfferID, r.RoomName, i)] = rnd.Int()
 		}
-		return inv[i].PricePerRoom < inv[j].PricePerRoom
-	})
 
-	log.Printf("🔄 Deterministic ordering enforced: %d families  %d room types", len(fams), len(inv))
-
-	result := SimResult{}
-
-	for _, fam := range fams {
-		bestScore := math.MaxFloat64
-		bestIdx := -1
-
-		for ri := range inv {
-			if inv[ri].Available <= 0 || inv[ri].MaxCapacity < fam.Size {
-				continue
+		sort.SliceStable(fams, func(i, j int) bool {
+			fi, fj := fams[i], fams[j]
+			if fi.Size != fj.Size {
+				return fi.Size > fj.Size // largest families first
 			}
-			waste := inv[ri].MaxCapacity - fam.Size
-			sc := computeScore(waste, inv[ri].PricePerRoom)
-			if sc < bestScore {
-				bestScore = sc
-				bestIdx = ri
+			if t > 0 {
+				return famShuffle[fi.FamilyID] < famShuffle[fj.FamilyID]
+			}
+			if fi.StayDuration != fj.StayDuration {
+				return fi.StayDuration > fj.StayDuration // longer stays first
+			}
+			aiZero := fi.ArrivalDate.IsZero()
+			ajZero := fj.ArrivalDate.IsZero()
+			if aiZero && ajZero {
+				return fi.FamilyID < fj.FamilyID // stable tie-break
+			}
+			if aiZero {
+				return false // push missing-arrival to end
+			}
+			if ajZero {
+				return true
+			}
+			return fi.ArrivalDate.Before(fj.ArrivalDate) // earliest arrival first
+		})
+
+		// Rooms: smallest capacity first, cheapest price first within same capacity
+		sort.SliceStable(inv, func(i, j int) bool {
+			if inv[i].MaxCapacity != inv[j].MaxCapacity {
+				return inv[i].MaxCapacity < inv[j].MaxCapacity
+			}
+			if t > 0 && inv[i].PricePerRoom == inv[j].PricePerRoom {
+				return roomShuffle[fmt.Sprintf("%s_%s_%d", inv[i].RoomOfferID, inv[i].RoomName, i)] < roomShuffle[fmt.Sprintf("%s_%s_%d", inv[j].RoomOfferID, inv[j].RoomName, j)]
+			}
+			return inv[i].PricePerRoom < inv[j].PricePerRoom
+		})
+
+		result := SimResult{}
+
+		for _, fam := range fams {
+			bestAssignScore := math.MaxFloat64
+			bestIdx := -1
+
+			for ri := range inv {
+				if inv[ri].Available <= 0 || inv[ri].MaxCapacity < fam.Size {
+					continue
+				}
+				waste := inv[ri].MaxCapacity - fam.Size
+				sc := computeScore(waste, inv[ri].PricePerRoom)
+				if sc < bestAssignScore {
+					bestAssignScore = sc
+					bestIdx = ri
+				}
+			}
+
+			if bestIdx >= 0 {
+				waste := inv[bestIdx].MaxCapacity - fam.Size
+				result.TotalWaste += waste
+				result.TotalCost += inv[bestIdx].PricePerRoom
+				result.RoomsUsed++
+				inv[bestIdx].Available--
+
+				result.Suggestions = append(result.Suggestions, SuggestionItem{
+					FamilyID:          fam.FamilyID,
+					RoomOfferID:       inv[bestIdx].RoomOfferID,
+					RoomName:          inv[bestIdx].RoomName,
+					FamilySize:        fam.Size,
+					Capacity:          inv[bestIdx].MaxCapacity,
+					CapacityWaste:     waste,
+					AllocationScore:   math.Round(bestAssignScore*100) / 100,
+					RoomPrice:         inv[bestIdx].PricePerRoom,
+					ConfidenceScore:   computeConfidence(waste, inv[bestIdx].MaxCapacity),
+					IsVirtualResidual: inv[bestIdx].IsVirtualResidual,
+				})
+			} else {
+				result.FamiliesSkipped++
+				result.UnplaceableFamilies = append(result.UnplaceableFamilies, fam.FamilyID)
 			}
 		}
 
-		if bestIdx >= 0 {
-			waste := inv[bestIdx].MaxCapacity - fam.Size
-			result.TotalWaste += waste
-			result.TotalCost += inv[bestIdx].PricePerRoom
-			result.RoomsUsed++
-			inv[bestIdx].Available--
+		computeGlobalScore(&result, inv)
 
-			result.Suggestions = append(result.Suggestions, SuggestionItem{
-				FamilyID:        fam.FamilyID,
-				RoomOfferID:     inv[bestIdx].RoomOfferID,
-				RoomName:        inv[bestIdx].RoomName,
-				FamilySize:      fam.Size,
-				Capacity:        inv[bestIdx].MaxCapacity,
-				CapacityWaste:   waste,
-				AllocationScore: math.Round(bestScore*100) / 100,
-				RoomPrice:       inv[bestIdx].PricePerRoom,
-				ConfidenceScore: computeConfidence(waste, inv[bestIdx].MaxCapacity),
-			})
-		} else {
-			result.FamiliesSkipped++
-			result.UnplaceableFamilies = append(result.UnplaceableFamilies, fam.FamilyID)
+		if result.GlobalScore < bestScore {
+			bestScore = result.GlobalScore
+			bestResult = result
 		}
 	}
 
-	log.Printf("✅ Optimised simulation: waste=%d  cost=%.2f  roomsUsed=%d  unplaceable=%d",
-		result.TotalWaste, result.TotalCost, result.RoomsUsed, result.FamiliesSkipped)
+	log.Printf("✅ Optimised simulation (multi-start): waste=%d  cost=%.2f  roomsUsed=%d  unplaceable=%d bestScore=%.2f",
+		bestResult.TotalWaste, bestResult.TotalCost, bestResult.RoomsUsed, bestResult.FamiliesSkipped, bestResult.GlobalScore)
 
-	return result
+	return bestResult
+}
+
+func computeGlobalScore(result *SimResult, inv []VirtualRoom) {
+	var localScoreSum float64
+	for _, item := range result.Suggestions {
+		localScoreSum += item.AllocationScore
+	}
+
+	var fillRatios []float64
+	for _, room := range inv {
+		if room.Total > 0 {
+			usedCapacity := (room.Total - room.Available) * room.MaxCapacity
+			maxCapacity := room.Total * room.MaxCapacity
+			fillRatio := float64(usedCapacity) / float64(maxCapacity)
+			fillRatios = append(fillRatios, fillRatio)
+		}
+	}
+
+	var varianceFill float64
+	if len(fillRatios) > 1 {
+		var mean float64
+		for _, r := range fillRatios {
+			mean += r
+		}
+		mean /= float64(len(fillRatios))
+
+		var sumSq float64
+		for _, r := range fillRatios {
+			diff := r - mean
+			sumSq += diff * diff
+		}
+		varianceFill = sumSq / float64(len(fillRatios))
+	}
+
+	result.VarianceFill = varianceFill
+	result.GlobalScore = localScoreSum + 0.15*varianceFill
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -541,17 +676,17 @@ func computeScore(capacityWaste int, roomPrice float64) float64 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // computeMetrics derives all quality metrics from baseline and optimised results.
-func computeMetrics(baseline, optimised SimResult, totalGuests int) AIMetrics {
-	var improvementPct float64
+func computeMetrics(baseline, optimised SimResult, totalGuests int, numTrials int, bestScore float64, residualCount int) (AIMetrics, float64) {
+	var wasteImprovementPct float64
 	if baseline.TotalWaste > 0 {
-		improvementPct = float64(baseline.TotalWaste-optimised.TotalWaste) / float64(baseline.TotalWaste) * 100.0
+		wasteImprovementPct = float64(baseline.TotalWaste-optimised.TotalWaste) / float64(baseline.TotalWaste) * 100.0
 	}
-	improvementPct = math.Round(improvementPct*100) / 100
-	if improvementPct < 0 {
-		improvementPct = 0
+	wasteImprovementPct = math.Round(wasteImprovementPct*100) / 100
+	if wasteImprovementPct < 0 {
+		wasteImprovementPct = 0
 	}
-	if improvementPct > 100 {
-		improvementPct = 100
+	if wasteImprovementPct > 100 {
+		wasteImprovementPct = 100
 	}
 
 	baselineCapUsed := baseline.TotalWaste + totalGuests
@@ -565,15 +700,38 @@ func computeMetrics(baseline, optimised SimResult, totalGuests int) AIMetrics {
 		utilisationImprovementPct = math.Round(utilisationImprovementPct*100) / 100
 	}
 
-	return AIMetrics{
+	var costImprovementPercent float64
+	if baseline.TotalCost > 0 {
+		costImprovementPercent = (baseline.TotalCost - optimised.TotalCost) / baseline.TotalCost * 100.0
+	}
+
+	var varianceImprovementPercent float64
+	if baseline.VarianceFill > 0 {
+		varianceImprovementPercent = (baseline.VarianceFill - optimised.VarianceFill) / baseline.VarianceFill * 100.0
+	}
+
+	improvementIndex := (0.5 * wasteImprovementPct) + (0.2 * costImprovementPercent) + (0.2 * varianceImprovementPercent)
+	improvementIndex = math.Round(improvementIndex*100) / 100
+
+	stagnationFlag := wasteImprovementPct == 0 && costImprovementPercent == 0 && varianceImprovementPercent == 0
+
+	metrics := AIMetrics{
 		CapacityWasteBefore:           baseline.TotalWaste,
 		CapacityWasteAfter:            optimised.TotalWaste,
-		ImprovementPercent:            improvementPct,
+		ImprovementPercent:            wasteImprovementPct,
 		TotalCostOptimised:            math.Round(optimised.TotalCost*100) / 100,
 		RoomsUsedBefore:               baseline.RoomsUsed,
 		RoomsUsedAfter:                optimised.RoomsUsed,
 		UtilisationImprovementPercent: utilisationImprovementPct,
+		NumberOfTrialsExecuted:        numTrials,
+		BestTrialScore:                bestScore,
+		VarianceBefore:                baseline.VarianceFill,
+		VarianceAfter:                 optimised.VarianceFill,
+		ResidualSlotsGenerated:        residualCount,
+		StagnationFlag:                stagnationFlag,
 	}
+
+	return metrics, improvementIndex
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -709,17 +867,25 @@ func AIAllocateHandler(db *gorm.DB) fiber.Handler {
 			totalGuests += f.Size
 		}
 
+		// ── Calculate residual counts ──
+		residualCount := 0
+		for _, r := range ctx.OptInventory {
+			if r.IsVirtualResidual {
+				residualCount++
+			}
+		}
+
 		// ── Baseline + Optimisation ───────────────────────────────────────────
 		baseline := SimulateBaselineAllocation(ctx)
-		optimised := RunHeuristicOptimisation(ctx)
+		optimised := RunHeuristicOptimisation(ctx, runStart)
 
 		// ── Metrics + Reasoning + Validity ────────────────────────────────────
-		metrics := computeMetrics(baseline, optimised, totalGuests)
+		metrics, improvementIndex := computeMetrics(baseline, optimised, totalGuests, 10, optimised.GlobalScore, residualCount)
 		reasoning := generateReasoning(baseline, optimised, metrics)
 		planValidity := buildPlanValidity(runStart)
 
 		// FIX 1: Determine if optimisation is meaningfully better than baseline.
-		optimisationEffective := metrics.ImprovementPercent >= optimisationEffectiveThreshold
+		optimisationEffective := improvementIndex >= 3.0 // 3%
 		optimisationMessage := ""
 		if !optimisationEffective {
 			optimisationMessage = "Current allocation is already near-optimal given available room capacities."
@@ -728,10 +894,10 @@ func AIAllocateHandler(db *gorm.DB) fiber.Handler {
 		// FIX 7: Structured deterministic debug log with optimisationEffective flag.
 		roomsEvaluated := len(ctx.OptInventory)
 		log.Printf("📈 AI optimisation run | eventId: %s | familiesProcessed: %d | roomsEvaluated: %d | "+
-			"baselineWaste: %d | optimisedWaste: %d | improvementPercent: %.2f%% | "+
+			"baselineWaste: %d | optimisedWaste: %d | improvementPercent: %.2f%% | improvementIndex: %.2f | "+
 			"optimisationEffective: %v | deterministicOrdering: true",
 			eventIDStr, len(ctx.UnallocatedFams), roomsEvaluated,
-			baseline.TotalWaste, optimised.TotalWaste, metrics.ImprovementPercent,
+			baseline.TotalWaste, optimised.TotalWaste, metrics.ImprovementPercent, improvementIndex,
 			optimisationEffective)
 		log.Printf("   Families skipped baseline: %d | Unplaceable optimised: %d | Plan valid until: %s",
 			baseline.FamiliesSkipped, optimised.FamiliesSkipped,
