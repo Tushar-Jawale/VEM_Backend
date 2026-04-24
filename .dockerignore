@@ -1,0 +1,38 @@
+# Version control
+.git
+.gitignore
+
+# Environment variables (SECURITY RISK)
+.env
+*.env
+.env.*
+
+# Go build artifacts
+bin/
+build/
+*.exe
+*.test
+*.out
+*.coverprofile
+profile.cov
+vendor/
+go.work
+go.work.sum
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docs and planning
+docs/
+README.md
+*.md
+TBO.code-workspace
+
+# Scripts and migrations (not needed in build)
+/scripts/
+migrations/
